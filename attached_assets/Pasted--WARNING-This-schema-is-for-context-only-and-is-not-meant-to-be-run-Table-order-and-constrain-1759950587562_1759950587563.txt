@@ -1,0 +1,135 @@
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public.appointments (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  customer_id uuid NOT NULL,
+  staff_id uuid NOT NULL,
+  service_id uuid NOT NULL,
+  location_id uuid NOT NULL,
+  start_time timestamp without time zone NOT NULL,
+  end_time timestamp without time zone NOT NULL,
+  google_calendar_event_id character varying,
+  status character varying NOT NULL DEFAULT 'confirmed'::character varying,
+  notes text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp without time zone NOT NULL,
+  cancelled_at timestamp without time zone,
+  CONSTRAINT appointments_pkey PRIMARY KEY (id),
+  CONSTRAINT appointments_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id),
+  CONSTRAINT appointments_staff_id_fkey FOREIGN KEY (staff_id) REFERENCES public.staff(id),
+  CONSTRAINT appointments_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id),
+  CONSTRAINT appointments_location_id_fkey FOREIGN KEY (location_id) REFERENCES public.locations(id)
+);
+CREATE TABLE public.business_exceptions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  location_id uuid,
+  exception_date date NOT NULL,
+  opens time without time zone,
+  closes time without time zone,
+  is_closed boolean DEFAULT true,
+  reason character varying,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT business_exceptions_pkey PRIMARY KEY (id),
+  CONSTRAINT business_exceptions_location_id_fkey FOREIGN KEY (location_id) REFERENCES public.locations(id)
+);
+CREATE TABLE public.business_hours (
+  id bigint NOT NULL DEFAULT nextval('business_hours_id_seq'::regclass),
+  location_id uuid,
+  weekday integer NOT NULL CHECK (weekday >= 0 AND weekday <= 6),
+  opens time without time zone NOT NULL,
+  closes time without time zone NOT NULL,
+  CONSTRAINT business_hours_pkey PRIMARY KEY (id),
+  CONSTRAINT business_hours_location_id_fkey FOREIGN KEY (location_id) REFERENCES public.locations(id)
+);
+CREATE TABLE public.chat_sessions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  customer_whatsapp character varying NOT NULL UNIQUE,
+  current_state character varying DEFAULT 'initial'::character varying,
+  collected_data jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  history jsonb,
+  CONSTRAINT chat_sessions_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.customer_favorite_services (
+  customer_id uuid NOT NULL,
+  service_id uuid NOT NULL,
+  CONSTRAINT customer_favorite_services_pkey PRIMARY KEY (service_id, customer_id),
+  CONSTRAINT customer_favorite_services_customer_id_fkey FOREIGN KEY (customer_id) REFERENCES public.customers(id),
+  CONSTRAINT customer_favorite_services_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id)
+);
+CREATE TABLE public.customers (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  full_name text NOT NULL,
+  whatsapp text NOT NULL UNIQUE,
+  email text UNIQUE,
+  birth_date date,
+  favorite_polish_colors text,
+  preferred_polish_shades text,
+  preferred_location_id uuid,
+  notes text,
+  created_at timestamp with time zone DEFAULT now(),
+  Último status text,
+  CONSTRAINT customers_pkey PRIMARY KEY (id),
+  CONSTRAINT customers_preferred_location_id_fkey FOREIGN KEY (preferred_location_id) REFERENCES public.locations(id)
+);
+CREATE TABLE public.locations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  slug text NOT NULL UNIQUE,
+  address text,
+  reference_point text,
+  CONSTRAINT locations_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.service_locations (
+  service_id uuid NOT NULL,
+  location_id uuid NOT NULL,
+  CONSTRAINT service_locations_pkey PRIMARY KEY (service_id, location_id),
+  CONSTRAINT service_locations_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id),
+  CONSTRAINT service_locations_location_id_fkey FOREIGN KEY (location_id) REFERENCES public.locations(id)
+);
+CREATE TABLE public.services (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  category text,
+  name text NOT NULL,
+  description text,
+  default_duration_min integer,
+  variable_duration boolean DEFAULT false,
+  price_centavos real,
+  popular boolean DEFAULT false,
+  image_url text,
+  active boolean DEFAULT true,
+  CONSTRAINT services_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.staff (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  role text,
+  active boolean DEFAULT true,
+  CONSTRAINT staff_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.staff_google (
+  staff_id uuid NOT NULL,
+  calendar_id text NOT NULL,
+  CONSTRAINT staff_google_pkey PRIMARY KEY (staff_id),
+  CONSTRAINT staff_google_staff_id_fkey FOREIGN KEY (staff_id) REFERENCES public.staff(id)
+);
+CREATE TABLE public.staff_services (
+  staff_id uuid NOT NULL,
+  service_id uuid NOT NULL,
+  CONSTRAINT staff_services_pkey PRIMARY KEY (service_id, staff_id),
+  CONSTRAINT staff_services_staff_id_fkey FOREIGN KEY (staff_id) REFERENCES public.staff(id),
+  CONSTRAINT staff_services_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id)
+);
+CREATE TABLE public.staff_shifts (
+  id bigint NOT NULL DEFAULT nextval('staff_shifts_id_seq'::regclass),
+  staff_id uuid,
+  location_id uuid,
+  weekday integer NOT NULL CHECK (weekday >= 0 AND weekday <= 6),
+  start_time time without time zone NOT NULL,
+  end_time time without time zone NOT NULL,
+  CONSTRAINT staff_shifts_pkey PRIMARY KEY (id),
+  CONSTRAINT staff_shifts_staff_id_fkey FOREIGN KEY (staff_id) REFERENCES public.staff(id),
+  CONSTRAINT staff_shifts_location_id_fkey FOREIGN KEY (location_id) REFERENCES public.locations(id)
+);

@@ -1,0 +1,382 @@
+Crie um sistema completo de gestão para salão de beleza usando Django (backend) e React (frontend) no Replit, com as seguintes especificações:
+
+## IMPORTANTE: BANCO DE DADOS SUPABASE
+
+O projeto já possui um banco de dados PostgreSQL no Supabase com as seguintes tabelas existentes:
+- appointments
+- business_exceptions
+- business_hours
+- chat_sessions
+- customer_favorite_services
+- customers
+- locations
+- service_locations
+- services
+- staff
+- staff_google
+- staff_services
+- staff_shifts
+
+**ATENÇÃO**: 
+1. NÃO crie novos modelos ou migrações Django do zero
+2. Use as tabelas EXISTENTES do Supabase
+3. Configure Django para conectar ao Supabase via variáveis de ambiente
+4. Crie modelos Django que MAPEIEM (não criem) as tabelas existentes usando `managed = False` e `db_table`
+5. Adapte a nomenclatura Django aos nomes de tabelas existentes
+
+## ESTRUTURA DO PROJETO
+
+### Backend (Django + Django REST Framework)
+- Configure Django com PostgreSQL do Supabase
+- Implemente Django REST Framework para API
+- Configure CORS para comunicação com React
+- Implemente autenticação JWT com permissões por perfil (admin, gerente, colaborador)
+
+### Frontend (React + Vite)
+- Use React com Vite
+- Tailwind CSS para estilização
+- React Router para navegação
+- Axios para requisições API
+- Lucide React para ícones
+
+## CONFIGURAÇÃO DO SUPABASE
+
+No arquivo settings.py do Django, configure:
+```python
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('SUPABASE_DB_NAME'),
+        'USER': os.getenv('SUPABASE_DB_USER'),
+        'PASSWORD': os.getenv('SUPABASE_DB_PASSWORD'),
+        'HOST': os.getenv('SUPABASE_DB_HOST'),
+        'PORT': os.getenv('SUPABASE_DB_PORT', '5432'),
+    }
+}
+Crie arquivo .env com:
+SUPABASE_DB_NAME=postgres
+SUPABASE_DB_USER=postgres.xxxxx
+SUPABASE_DB_PASSWORD=sua_senha
+SUPABASE_DB_HOST=aws-0-us-east-1.pooler.supabase.com
+SUPABASE_DB_PORT=6543
+MAPEAMENTO DOS MODELOS DJANGO
+Crie modelos Django que MAPEIEM as tabelas existentes. Exemplo:
+1. Location (mapeia tabela 'locations')
+pythonclass Location(models.Model):
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255)
+    address = models.TextField(null=True, blank=True)
+    phone = models.CharField(max_length=50, null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        managed = False  # NÃO gerenciar migrações
+        db_table = 'locations'  # Nome da tabela existente
+2. Staff (mapeia tabela 'staff')
+pythonclass Staff(models.Model):
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255)
+    role = models.CharField(max_length=100)
+    phone = models.CharField(max_length=50, null=True, blank=True)
+    email = models.EmailField(null=True, blank=True)
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, db_column='location_id')
+    default_commission_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        managed = False
+        db_table = 'staff'
+3. Service (mapeia tabela 'services')
+pythonclass Service(models.Model):
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255)
+    duration_minutes = models.IntegerField()
+    base_price = models.DecimalField(max_digits=10, decimal_places=2)
+    default_commission_rate = models.DecimalField(max_digits=5, decimal_places=2)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        managed = False
+        db_table = 'services'
+4. Customer (mapeia tabela 'customers')
+pythonclass Customer(models.Model):
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=255)
+    phone = models.CharField(max_length=50, unique=True)
+    email = models.EmailField(null=True, blank=True)
+    birth_date = models.DateField(null=True, blank=True)
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        managed = False
+        db_table = 'customers'
+5. Appointment (mapeia tabela 'appointments')
+pythonclass Appointment(models.Model):
+    STATUS_CHOICES = [
+        ('pending', 'Pendente'),
+        ('confirmed', 'Confirmado'),
+        ('completed', 'Concluído'),
+        ('cancelled', 'Cancelado'),
+    ]
+    
+    id = models.AutoField(primary_key=True)
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, db_column='customer_id')
+    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, db_column='staff_id')
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, db_column='service_id')
+    location = models.ForeignKey(Location, on_delete=models.CASCADE, db_column='location_id')
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    notes = models.TextField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        managed = False
+        db_table = 'appointments'
+6. StaffService (mapeia tabela 'staff_services')
+pythonclass StaffService(models.Model):
+    id = models.AutoField(primary_key=True)
+    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, db_column='staff_id')
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, db_column='service_id')
+    custom_commission_rate = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    
+    class Meta:
+        managed = False
+        db_table = 'staff_services'
+NOVOS MODELOS NECESSÁRIOS (criar tabelas no Supabase via SQL)
+Execute estes SQLs no Supabase SQL Editor:
+sql-- Tabela de Pagamentos
+CREATE TABLE IF NOT EXISTS payments (
+    id SERIAL PRIMARY KEY,
+    appointment_id INTEGER REFERENCES appointments(id) ON DELETE CASCADE,
+    amount_received DECIMAL(10, 2) NOT NULL,
+    payment_method VARCHAR(50) NOT NULL, -- dinheiro, debito, credito, pix, outros
+    commission_amount DECIMAL(10, 2) NOT NULL,
+    payment_date TIMESTAMP NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Tabela de Bloqueios de Horário
+CREATE TABLE IF NOT EXISTS time_blocks (
+    id SERIAL PRIMARY KEY,
+    staff_id INTEGER REFERENCES staff(id) ON DELETE CASCADE,
+    start_time TIMESTAMP NOT NULL,
+    end_time TIMESTAMP NOT NULL,
+    reason VARCHAR(255),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Índices para performance
+CREATE INDEX idx_payments_appointment ON payments(appointment_id);
+CREATE INDEX idx_payments_date ON payments(payment_date);
+CREATE INDEX idx_time_blocks_staff ON time_blocks(staff_id);
+CREATE INDEX idx_appointments_datetime ON appointments(start_time, end_time);
+Depois crie os modelos Django para mapear:
+pythonclass Payment(models.Model):
+    PAYMENT_METHODS = [
+        ('dinheiro', 'Dinheiro'),
+        ('debito', 'Débito'),
+        ('credito', 'Crédito'),
+        ('pix', 'PIX'),
+        ('outros', 'Outros'),
+    ]
+    
+    id = models.AutoField(primary_key=True)
+    appointment = models.ForeignKey(Appointment, on_delete=models.CASCADE, db_column='appointment_id')
+    amount_received = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_method = models.CharField(max_length=50, choices=PAYMENT_METHODS)
+    commission_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    payment_date = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        managed = False
+        db_table = 'payments'
+
+class TimeBlock(models.Model):
+    id = models.AutoField(primary_key=True)
+    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, db_column='staff_id')
+    start_time = models.DateTimeField()
+    end_time = models.DateTimeField()
+    reason = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        managed = False
+        db_table = 'time_blocks'
+API ENDPOINTS
+Locations (Unidades)
+
+GET/POST /api/locations/
+GET/PUT/DELETE /api/locations/{id}/
+GET /api/locations/active/
+
+Staff (Colaboradores)
+
+GET/POST /api/staff/
+GET/PUT/DELETE /api/staff/{id}/
+GET /api/staff/by-location/{location_id}/
+GET /api/staff/{id}/commissions/?start_date=&end_date=
+
+Services (Serviços)
+
+GET/POST /api/services/
+GET/PUT/DELETE /api/services/{id}/
+POST /api/staff-services/ (personalizar comissão)
+
+Customers (Clientes)
+
+GET/POST /api/customers/
+GET/PUT/DELETE /api/customers/{id}/
+GET /api/customers/{id}/history/
+GET /api/customers/search/?phone=
+
+Appointments (Agendamentos)
+
+GET/POST /api/appointments/
+GET/PUT/DELETE /api/appointments/{id}/
+GET /api/appointments/schedule/?location=&staff=&start_date=&end_date=
+PATCH /api/appointments/{id}/update-status/
+
+Time Blocks (Bloqueios)
+
+GET/POST /api/time-blocks/
+GET/DELETE /api/time-blocks/{id}/
+GET /api/time-blocks/by-staff/{staff_id}/
+
+Payments (Pagamentos)
+
+GET/POST /api/payments/
+GET /api/payments/daily-report/?date=&location=
+GET /api/payments/period-report/?start_date=&end_date=&location=
+
+Dashboard
+
+GET /api/dashboard/summary/?location=&start_date=&end_date=
+
+INTERFACE REACT - PÁGINAS PRINCIPAIS
+1. Layout Principal
+
+Sidebar com navegação
+Header com filtro de unidade (location) global
+Área de conteúdo
+
+2. Dashboard
+
+Cards: faturamento do dia, agendamentos hoje, taxa de comparecimento
+Gráfico de faturamento semanal
+Próximos agendamentos
+
+3. Agenda
+
+Visualização timeline semanal/diária
+Filtros: location, staff, data
+Modal criar/editar agendamento
+Atualizar status (confirmado/concluído/cancelado)
+Criar bloqueio de horário
+
+4. Clientes (Customers)
+
+Tabela com busca
+Cadastro rápido
+Detalhes com histórico
+
+5. Colaboradores (Staff)
+
+Tabela com filtro por location
+Cadastro com comissão padrão
+Personalizar comissão por serviço
+
+6. Serviços (Services)
+
+Lista com valores e durações
+Formulário cadastro/edição
+
+7. Unidades (Locations)
+
+Lista de locations
+Formulário simples
+
+8. Financeiro (Payments)
+
+Lançar pagamento
+Relatório diário/período
+Comissões por colaborador
+
+9. Relatórios
+
+Faturamento por location/staff/service
+Serviços mais vendidos
+Taxa comparecimento
+Clientes frequentes
+
+FUNCIONALIDADES CRÍTICAS
+
+Cálculo automático de comissão: Ao registrar payment, calcular commission_amount baseado em custom_commission_rate (StaffService) ou default_commission_rate (Staff)
+Validação de conflitos: Não permitir appointments sobrepostos para mesmo staff
+Cadastro rápido de cliente: Criar customer ao agendar se não existir
+Filtro global por location: Context API para filtrar por unidade
+Responsividade: Mobile-friendly
+
+CONFIGURAÇÃO INICIAL DO REPLIT
+
+Estrutura:
+
+/backend (Django)
+/frontend (React + Vite)
+
+
+requirements.txt:
+
+Django==4.2
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+psycopg2-binary
+python-decouple
+
+
+package.json:
+
+react
+react-router-dom
+axios
+tailwindcss
+lucide-react
+date-fns
+
+
+.replit para rodar ambos servidores
+.env.example com variáveis Supabase
+
+IMPORTANTE
+
+NÃO executar makemigrations/migrate para modelos com managed=False
+Use managed = False em todos os modelos que mapeiam tabelas existentes
+Apenas crie migrações para novas tabelas (payments, time_blocks)
+Teste conexão com Supabase antes de criar endpoints
+NUNCA use localStorage/sessionStorage - apenas React state
+Valide todos os dados no backend
+
+PRIORIDADES
+
+Configurar conexão Supabase
+Criar modelos Django mapeando tabelas existentes
+Executar SQLs para criar payments e time_blocks no Supabase
+Criar serializers e viewsets
+Configurar JWT
+Estrutura React com rotas
+Implementar CRUDs principais
+Sistema de agendamentos
+Sistema de pagamentos
+Relatórios e dashboard
+
