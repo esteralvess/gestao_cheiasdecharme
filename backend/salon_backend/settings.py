@@ -26,9 +26,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-_p%k#0f8l_%29-0^dckiq+%q68-_@o5)8k=uk#v^eabgcgr9lm')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=True, cast=bool)
+# Lembre-se que no Render a variável de ambiente DEBUG deve ser 'False'
+DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = ['*']
+# --- ATUALIZADO AQUI ---
+# Adicione a URL do seu frontend (Vercel) quando a tiver
+ALLOWED_HOSTS = [
+    'salon-backend-zee3.onrender.com',      # Sua URL do Render
+    'SUA-URL-DO-FRONTEND.vercel.app',       # Adicione a URL do Vercel aqui
+]
 
 
 # Application definition
@@ -48,14 +54,13 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
+    'corsheaders.middleware.CorsMiddleware', # Deve vir antes de CommonMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
 ]
 
 ROOT_URLCONF = 'salon_backend.urls'
@@ -135,9 +140,16 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# --- ATUALIZADO AQUI ---
 # CORS Settings
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
+
+# Adicione as URLs exatas (com https) do seu backend e frontend
+CORS_ALLOWED_ORIGINS = [
+    "httpsS://salon-backend-zee3.onrender.com",    # URL do Backend
+    "httpsS://SUA-URL-DO-FRONTEND.vercel.app",  # URL do Frontend (Vercel)
+]
 
 # REST Framework Settings
 REST_FRAMEWORK = {
