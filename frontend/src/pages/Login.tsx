@@ -41,13 +41,25 @@ export default function Login() {
   // 3. Função de submit atualizada
   const onSubmit = async (values: z.infer<typeof formSchema>) => {
     setServerError("");
+
+    // 💡 CORREÇÃO: Cria um novo payload com os campos 'username' e 'password' limpos (.trim())
+    const payload = {
+        username: values.username.trim(), // Remove espaços em branco antes/depois
+        password: values.password.trim(), // Remove espaços em branco antes/depois
+        rememberMe: values.rememberMe,
+    };
+
     try {
-      await authAPI.login(values);
+      // Envia o payload com os valores limpos para a API
+      await authAPI.login(payload); 
+
       toast.success("Login bem-sucedido!", {
         description: "Redirecionando para o dashboard...",
       });
       setLocation('/'); 
     } catch (err: any) {
+      console.error("Erro no login:", err); // Adicionado para debug no console
+      // A mensagem de erro é mantida, pois indica falha de autenticação
       setServerError("Credenciais inválidas. Verifique seu usuário e senha.");
       toast.error("Falha no login");
     }

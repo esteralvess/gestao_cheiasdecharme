@@ -1,7 +1,18 @@
 import { apiRequest } from "../lib/queryClient"; 
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
-const getUrl = (path: string) => `${API_BASE}${path}`;
+
+// 💡 CORREÇÃO APLICADA AQUI: Função atualizada para evitar barras duplas na URL (ex: /api//token/)
+const getUrl = (path: string) => {
+    // 1. Remove barras duplas/múltiplas do final do API_BASE
+    const base = API_BASE.trim().replace(/\/+$/, ''); 
+    
+    // 2. Garante que o 'path' tenha uma barra inicial, mas remove barras múltiplas.
+    const normalizedPath = path.trim().replace(/^\/+/, '/');
+    
+    // Combina a base sem barra final com o caminho que tem uma única barra inicial
+    return `${base}${normalizedPath}`;
+};
 
 interface Credentials {
   username: string;

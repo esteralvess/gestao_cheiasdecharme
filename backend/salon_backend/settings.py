@@ -26,14 +26,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-_p%k#0f8l_%29-0^dckiq+%q68-_@o5)8k=uk#v^eabgcgr9lm')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# Lembre-se que no Render a variável de ambiente DEBUG deve ser 'False'
-DEBUG = config('DEBUG', default=False, cast=bool)
+# No Render isso será False, localmente pode ser True
+DEBUG = config('DEBUG', default=True, cast=bool)
 
-# --- ATUALIZADO AQUI ---
-# Adicione a URL do seu frontend (Vercel) quando a tiver
 ALLOWED_HOSTS = [
     'salon-backend-zee3.onrender.com',      # Sua URL do Render
-    'SUA-URL-DO-FRONTEND.vercel.app',       # Adicione a URL do Vercel aqui
+    '.vercel.app',                          # Permite subdomínios da Vercel
+    'gestao-cheiasdecharme.vercel.app',     # Sua URL específica
+    '127.0.0.1',                            # Local
+    'localhost',                            # Local
 ]
 
 
@@ -54,7 +55,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware', # Deve vir antes de CommonMiddleware
+    'corsheaders.middleware.CorsMiddleware', # IMPORTANTE: Deve estar no topo
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -96,7 +97,6 @@ DATABASES = {
         'HOST': config('SUPABASE_DB_HOST', default='localhost'),
         'PORT': config('SUPABASE_DB_PORT', default='5432'),
     }
-    
 }
 
 # Password validation
@@ -125,7 +125,7 @@ LANGUAGE_CODE = 'pt-br'
 
 TIME_ZONE = 'America/Sao_Paulo'
 
-USE_I18N = True
+USE_I1N = True
 
 USE_TZ = True
 
@@ -140,16 +140,26 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# --- ATUALIZADO AQUI ---
-# CORS Settings
-CORS_ALLOW_ALL_ORIGINS = False
+# =====================================================
+# CORS Settings (Configuração Crucial)
+# =====================================================
+
+# Permite QUALQUER origem (Resolve seu problema local agora)
+CORS_ALLOW_ALL_ORIGINS = True 
+
+# Permite envio de credenciais/cookies
 CORS_ALLOW_CREDENTIALS = True
 
-# Adicione as URLs exatas (com https) do seu backend e frontend
+# Lista explicita (Corrigida para referência e produção)
 CORS_ALLOWED_ORIGINS = [
-    "httpsS://salon-backend-zee3.onrender.com",    # URL do Backend
-    "httpsS://SUA-URL-DO-FRONTEND.vercel.app",  # URL do Frontend (Vercel)
+    "https://salon-backend-zee3.onrender.com",   
+    "https://gestao-cheiasdecharme.vercel.app", 
+    "http://127.0.0.1:8000",                  
+    "http://localhost:8000",                  
+    "http://localhost:5001", # Seu frontend local             
 ]
+
+# =====================================================
 
 # REST Framework Settings
 REST_FRAMEWORK = {
