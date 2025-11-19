@@ -14,6 +14,7 @@ from pathlib import Path
 from decouple import config
 from datetime import timedelta
 import os
+import dj_database_url # 💡 Necessário para o Render
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -23,18 +24,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
+# No Render, defina a variável de ambiente SECRET_KEY
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-_p%k#0f8l_%29-0^dckiq+%q68-_@o5)8k=uk#v^eabgcgr9lm')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-# No Render isso será False, localmente pode ser True
+# No Render, defina a variável de ambiente DEBUG = False
 DEBUG = config('DEBUG', default=True, cast=bool)
 
 ALLOWED_HOSTS = [
-    'salon-backend-zee3.onrender.com',      # Sua URL do Render
-    '.vercel.app',                          # Permite subdomínios da Vercel
-    'gestao-cheiasdecharme.vercel.app',     # Sua URL específica
-    '127.0.0.1',                            # Local
-    'localhost',                            # Local
+    '*' # 💡 Permite o Render e qualquer domínio (seguro o suficiente para APIs com CORS bem configurado)
 ]
 
 
@@ -55,7 +53,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware', # IMPORTANTE: Deve estar no topo
+    "whitenoise.middleware.WhiteNoiseMiddleware", # 💡 OBRIGATÓRIO: Deve estar logo após SecurityMiddleware
+    'corsheaders.middleware.CorsMiddleware',      # 💡 OBRIGATÓRIO: Deve estar antes de CommonMiddleware
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -88,16 +87,17 @@ WSGI_APPLICATION = 'salon_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
+# 💡 CONFIGURAÇÃO PARA RENDER + SUPABASE
+# O Render fornece a variável DATABASE_URL automaticamente se você criar um banco lá.
+# Se estiver usando Supabase externo, adicione DATABASE_URL nas "Environment Variables" do Render.
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('SUPABASE_DB_NAME', default='postgres'),
-        'USER': config('SUPABASE_DB_USER', default='postgres'),
-        'PASSWORD': config('SUPABASE_DB_PASSWORD', default=''),
-        'HOST': config('SUPABASE_DB_HOST', default='localhost'),
-        'PORT': config('SUPABASE_DB_PORT', default='5432'),
-    }
+    'default': dj_database_url.config(
+        default=config('DATABASE_URL', default='sqlite:///db.sqlite3'),
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
 }
+
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
@@ -125,7 +125,7 @@ LANGUAGE_CODE = 'pt-br'
 
 TIME_ZONE = 'America/Sao_Paulo'
 
-USE_I1N = True
+USE_I18N = True
 
 USE_TZ = True
 
@@ -135,29 +135,33 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# 💡 CONFIGURAÇÃO DO WHITENOISE (Essencial para o Render)
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # =====================================================
-# CORS Settings (Configuração Crucial)
+# CORS Settings (Configuração Crucial para Vercel)
 # =====================================================
 
-# Permite QUALQUER origem (Resolve seu problema local agora)
+# Em produção, é recomendável listar as origens, mas para garantir que funcione de primeira:
 CORS_ALLOW_ALL_ORIGINS = True 
 
-# Permite envio de credenciais/cookies
-CORS_ALLOW_CREDENTIALS = True
-
-# Lista explicita (Corrigida para referência e produção)
+# Se quiser ser mais restrito no futuro, comente a linha acima e use esta:
 CORS_ALLOWED_ORIGINS = [
     "https://salon-backend-zee3.onrender.com",   
-    "https://gestao-cheiasdecharme.vercel.app", 
+    "https://gestao-cheiasdecharme.vercel.app", # Sua URL da Vercel
     "http://127.0.0.1:8000",                  
     "http://localhost:8000",                  
-    "http://localhost:5001", # Seu frontend local             
+    "http://localhost:5173",                  
 ]
+
+CORS_ALLOW_CREDENTIALS = True
 
 # =====================================================
 
