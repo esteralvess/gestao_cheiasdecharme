@@ -88,8 +88,6 @@ WSGI_APPLICATION = 'salon_backend.wsgi.application'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 # 💡 CONFIGURAÇÃO PARA RENDER + SUPABASE
-# O Render fornece a variável DATABASE_URL automaticamente se você criar um banco lá.
-# Se estiver usando Supabase externo, adicione DATABASE_URL nas "Environment Variables" do Render.
 DATABASES = {
     'default': dj_database_url.config(
         default=config('DATABASE_URL', default='sqlite:///db.sqlite3'),
@@ -146,22 +144,37 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # =====================================================
-# CORS Settings (Configuração Crucial para Vercel)
+# CORS & CSRF Settings (Configuração Crucial para Deploy)
 # =====================================================
 
-# Em produção, é recomendável listar as origens, mas para garantir que funcione de primeira:
+# 1. CORS: Permite que o frontend faça requisições para o backend
 CORS_ALLOW_ALL_ORIGINS = True 
+CORS_ALLOW_CREDENTIALS = True
 
-# Se quiser ser mais restrito no futuro, comente a linha acima e use esta:
+# Lista explícita para referência (caso queira restringir no futuro)
 CORS_ALLOWED_ORIGINS = [
     "https://salon-backend-zee3.onrender.com",   
-    "https://gestao-cheiasdecharme.vercel.app", # Sua URL da Vercel
+    "https://gestao-cheiasdecharme.vercel.app", 
     "http://127.0.0.1:8000",                  
     "http://localhost:8000",                  
     "http://localhost:5173",                  
 ]
 
-CORS_ALLOW_CREDENTIALS = True
+# 2. CSRF: 💡 IMPORTANTE! Permite POSTs seguros vindo destes domínios
+CSRF_TRUSTED_ORIGINS = [
+    "https://salon-backend-zee3.onrender.com",   
+    "https://gestao-cheiasdecharme.vercel.app", 
+    "http://127.0.0.1:8000",                  
+    "http://localhost:8000",   
+    "http://localhost:5173", 
+]
+
+# Configurações de Cookie Seguro (Recomendado em Produção com HTTPS)
+if not DEBUG:
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SAMESITE = 'None'
+    SESSION_COOKIE_SAMESITE = 'None'
 
 # =====================================================
 
