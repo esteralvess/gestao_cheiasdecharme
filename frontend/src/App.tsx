@@ -19,6 +19,7 @@ import Reports from "@/pages/Reports";
 import NotFound from "@/pages/not-found";
 import Profile from "./pages/Profile";
 import Management from "./pages/Management";
+import AgendamentoCliente from "./pages/AgendamentoCliente";
 
 // 🚨 NOVO: Componente para verificar a autenticação
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -60,6 +61,7 @@ function MainLayout() {
               <Route path="/reports" component={Reports} />
               <Route path="/profile" component={Profile} />
               <Route path="/management" component={Management} />
+              <Route path="/agendamento-cliente" component={AgendamentoCliente} />
               <Route component={NotFound} />
             </Switch>
           </main>

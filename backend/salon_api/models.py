@@ -72,7 +72,7 @@ class Customer(models.Model):
         max_length=50,
         choices=STATUS_CHOICES,
         default='Atendimento Robo',
-        db_column='chat_status', # Mapeia para a nova coluna
+        db_column='chat_status',
         null=True, blank=True
     )
     
@@ -81,6 +81,8 @@ class Customer(models.Model):
     preferred_location_id = models.UUIDField(null=True, blank=True)
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    is_truly_new = models.BooleanField(default=False, null=True, blank=True)
     
     class Meta:
         managed = False
@@ -97,7 +99,6 @@ class Appointment(models.Model):
         ('cancelled', 'Cancelado'),
     ]
     
-    # ✅ NOVAS OPÇÕES PARA MÉTODO DE PAGAMENTO
     PAYMENT_METHOD_CHOICES = [
         ('pix', 'Pix'),
         ('credito', 'Crédito'),
@@ -120,7 +121,6 @@ class Appointment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     cancelled_at = models.DateTimeField(null=True, blank=True)
 
-    # ✅ NOVOS CAMPOS FINANCEIROS
     payment_method = models.CharField(
         max_length=20, 
         choices=PAYMENT_METHOD_CHOICES, 

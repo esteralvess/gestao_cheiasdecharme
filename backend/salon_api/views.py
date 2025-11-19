@@ -17,14 +17,14 @@ from .serializers import (
 from django.db.models import Count, Q, F, Sum
 from django.utils import timezone
 from rest_framework.views import APIView
-from datetime import datetime, date
+from datetime import datetime, date, timedelta 
+from django.db import transaction 
 
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.filter(is_superuser=False).order_by('username') # Não mostramos o superadmin
+    queryset = User.objects.filter(is_superuser=False).order_by('username')
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAuthenticated] # Apenas administradores devem acessar isso!
+    permission_classes = [permissions.IsAuthenticated]
 
-    # Ação customizada para definir a senha de um novo usuário ou resetar
     @action(detail=True, methods=['post'], url_path='set-password')
     def set_password(self, request, pk=None):
         user = self.get_object()
@@ -46,7 +46,7 @@ class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
 class CurrentUserView(APIView):
-    permission_classes = [permissions.IsAuthenticated] # ESSENCIAL: Apenas usuários logados podem acessar
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         """Retorna os dados do usuário logado."""
@@ -56,7 +56,7 @@ class CurrentUserView(APIView):
     def put(self, request):
         """Atualiza os dados do usuário logado."""
         user = request.user
-        serializer = UserSerializer(user, data=request.data, partial=True) # partial=True permite atualizações parciais
+        serializer = UserSerializer(user, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -136,6 +136,103 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     queryset = Appointment.objects.all()
     serializer_class = AppointmentSerializer
     permission_classes = [permissions.AllowAny]
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        data = request.data.copy()
+        
+        # --- 1. Customer Lookup/Creation ---
+        customer_id = data.get('customer')
+        customer_name = data.pop('customer_name', None)
+        customer_phone = data.pop('customer_phone', None)
+        customer_email = data.pop('customer_email', None)
+
+        if not customer_id and customer_name and customer_phone:
+            # Tenta encontrar o cliente pelo WhatsApp (campo 'whatsapp' no modelo Customer)
+            try:
+                customer = Customer.objects.get(whatsapp=customer_phone) 
+            except Customer.DoesNotExist:
+                # Se não encontrar, cria um novo cliente
+                customer = Customer.objects.create(
+                    full_name=customer_name,
+                    whatsapp=customer_phone, 
+                    email=customer_email,
+                    is_truly_new=True 
+                )
+            data['customer'] = customer.id 
+        
+        if not data.get('customer'):
+            return Response({"error": "ID do cliente ou dados de contato (nome e telefone) são obrigatórios."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # --- 2. Multi-Appointment Handling & Sequencing ---
+        
+        # 💡 NOVO: Extrai o array de serviços (campo 'services' do Serializer)
+        service_ids = data.pop('services', [data.get('service')])
+        
+        if not service_ids or (len(service_ids) == 1 and not service_ids[0]):
+             return Response({"error": "Nenhum serviço fornecido para agendamento."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2a. Busca os objetos Service e ordena pelo ID (garante sequência estável)
+        services_to_book = Service.objects.filter(id__in=service_ids).order_by('pk')
+        
+        # Garantia de dados obrigatórios
+        required_fields = ['staff', 'location', 'start_time']
+        for field in required_fields:
+            if not data.get(field):
+                 return Response({"error": f"O campo '{field}' é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Se a localização não foi definida (fallback para agendamento online)
+        if not data.get('location'):
+            staff_id = data.get('staff')
+            staff_shift = StaffShift.objects.filter(staff_id=staff_id).first()
+            if staff_shift:
+                data['location'] = staff_shift.location_id
+            else:
+                first_location = Location.objects.all().first()
+                if first_location:
+                    data['location'] = first_location.id
+                else:
+                    return Response({"error": "Não foi possível determinar a localização do agendamento."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # Converte a string ISO para objeto datetime (tratando o offset se necessário)
+            current_start_time = datetime.fromisoformat(data['start_time'].replace('Z', '+00:00'))
+        except ValueError:
+             return Response({"error": "Formato de start_time inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        created_appointments = []
+        
+        # Remove campos que serão redefinidos
+        data.pop('service', None) 
+        data.pop('end_time', None)
+
+        # 2b. Itera sobre os serviços e calcula o sequenciamento
+        for service_obj in services_to_book:
+            duration_minutes = service_obj.default_duration_min or 30
+            current_end_time = current_start_time + timedelta(minutes=duration_minutes)
+            
+            # Prepara os dados para o agendamento individual
+            appointment_data = data.copy()
+            appointment_data['service'] = service_obj.id # ID do Serviço atual
+            appointment_data['start_time'] = current_start_time.isoformat()
+            appointment_data['end_time'] = current_end_time.isoformat()
+            
+            # 2c. Valida e Cria
+            serializer = self.get_serializer(data=appointment_data)
+            serializer.is_valid(raise_exception=True)
+            
+            # Cria o objeto no banco de dados
+            created_appointments.append(serializer.save())
+            
+            # 2d. Atualiza o start_time para o PRÓXIMO agendamento
+            current_start_time = current_end_time 
+
+        # Retorna o primeiro agendamento criado (como representação da requisição)
+        if created_appointments:
+             return Response(self.get_serializer(created_appointments[0]).data, status=status.HTTP_201_CREATED)
+        else:
+             return Response({"error": "Erro desconhecido na criação dos agendamentos."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -251,7 +348,6 @@ class ReferralViewSet(viewsets.ModelViewSet):
             if instance.status != 'completed': return Response({"error": "Esta recompensa não está disponível para uso."}, status=status.HTTP_400_BAD_REQUEST)
             instance.status = 'reward_used'
             instance.reward_applied_at = timezone.now()
-            instance.save()
             return Response(self.get_serializer(instance).data, status=status.HTTP_200_OK)
         except Referral.DoesNotExist:
             return Response({"error": "Indicação não encontrada."}, status=status.HTTP_404_NOT_FOUND)
@@ -343,17 +439,17 @@ class RevenueByServiceReport(APIView):
             start_time__date__gte=start_date,
             start_time__date__lte=end_date
         ).values(
-            'service__name',       # Agrupa pelo nome do serviço
-            'service__category'    # Também inclui a categoria para o frontend
+            'service__name',
+            'service__category'
         ).annotate(
             total_revenue=Sum('final_amount_centavos'),
-            count=Count('id')      # Conta quantos foram vendidos
+            count=Count('id')
         ).order_by('-total_revenue')
 
         report = [
             {
                 "name": item['service__name'],
-                "category": item['service__category'] or 'Sem Categoria', # Garante que não haja categoria nula
+                "category": item['service__category'] or 'Sem Categoria',
                 "value": item['total_revenue'],
                 "count": item['count']
             }

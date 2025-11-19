@@ -93,9 +93,22 @@ class AppointmentSerializer(serializers.ModelSerializer):
     service_name = serializers.CharField(source='service.name', read_only=True)
     location_name = serializers.CharField(source='location.name', read_only=True)
     
+    # 💡 NOVO: Campo write_only para receber o array de service IDs
+    services = serializers.ListField(
+        child=serializers.UUIDField(), 
+        write_only=True, 
+        required=False,
+        allow_empty=True
+    )
+
     class Meta:
         model = Appointment
-        fields = '__all__'
+        fields = [
+            'id', 'customer', 'staff', 'service', 'location', 'start_time', 'end_time', 
+            'google_calendar_event_id', 'status', 'notes', 'created_at', 'updated_at', 
+            'cancelled_at', 'payment_method', 'discount_centavos', 'final_amount_centavos',
+            'customer_name', 'staff_name', 'service_name', 'location_name', 'services'
+        ]
         extra_kwargs = {
             'customer': {'required': False},
             'staff': {'required': False},
@@ -103,7 +116,6 @@ class AppointmentSerializer(serializers.ModelSerializer):
             'location': {'required': False},
             'start_time': {'required': False},
             'end_time': {'required': False},
-            # ✅ Torna os novos campos opcionais na API, já que só são preenchidos no final
             'payment_method': {'required': False},
             'discount_centavos': {'required': False},
             'final_amount_centavos': {'required': False},
@@ -221,8 +233,8 @@ class StaffExceptionSerializer(serializers.ModelSerializer):
         if is_patch_status_only:
             fields_to_make_optional = ['staff_id', 'start_date', 'end_date', 'type', 'notes']
             
-            for field_name in fields_to_make_optional:
-                if field_name in self.fields:
+            for field_name in self.fields:
+                if field_name in self.fields and field_name in fields_to_make_optional:
                     self.fields[field_name].required = False
         
         return super().to_internal_value(data)
