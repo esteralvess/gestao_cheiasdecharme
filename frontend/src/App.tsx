@@ -1,5 +1,5 @@
-import * as React from "react"; // Necessário para React.CSSProperties
-import { Switch, Route, Redirect } from "wouter"; // 🚨 ADICIONADO 'Redirect'
+import * as React from "react"; 
+import { Switch, Route, Redirect } from "wouter"; 
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -19,26 +19,19 @@ import Reports from "@/pages/Reports";
 import NotFound from "@/pages/not-found";
 import Profile from "./pages/Profile";
 import Management from "./pages/Management";
-import AgendamentoCliente from "./pages/AgendamentoCliente";
+// 💡 IMPORTAÇÃO DA PÁGINA PÚBLICA
+import AgendamentoCliente from "@/pages/AgendamentoCliente"; 
 
-// 🚨 NOVO: Componente para verificar a autenticação
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  // Lógica do seu projeto antigo: verifica se o token está no localStorage
-  const token = localStorage.getItem('access_token')|| sessionStorage.getItem('accessToken');
-  
+  const token = localStorage.getItem('access_token') || sessionStorage.getItem('accessToken');
   if (!token) {
-    // Redireciona o usuário para a tela de login se não houver token
     return <Redirect to="/login" />;
   }
-
   return <>{children}</>;
 }
 
 function MainLayout() {
-  const style = {
-    "--sidebar-width": "16rem",
-  };
-
+  const style = { "--sidebar-width": "16rem" };
   return (
     <SidebarProvider style={style as React.CSSProperties}>
       <div className="flex h-screen w-full">
@@ -49,7 +42,6 @@ function MainLayout() {
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto bg-background">
-            {/* O Switch aqui não precisa ser alterado, pois as rotas serão renderizadas dentro do MainLayout */}
             <Switch>
               <Route path="/" component={Dashboard} />
               <Route path="/appointments" component={Appointments} />
@@ -61,7 +53,6 @@ function MainLayout() {
               <Route path="/reports" component={Reports} />
               <Route path="/profile" component={Profile} />
               <Route path="/management" component={Management} />
-              <Route path="/agendamento-cliente" component={AgendamentoCliente} />
               <Route component={NotFound} />
             </Switch>
           </main>
@@ -71,14 +62,16 @@ function MainLayout() {
   );
 }
 
-
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Switch>
+          {/* ROTAS PÚBLICAS (Não exigem login) */}
           <Route path="/login" component={Login} />
-          {/* 🚨 ROTAS PROTEGIDAS: Envolvemos todas as rotas (que estão no MainLayout) em PrivateRoute */}
+          <Route path="/agendar" component={AgendamentoCliente} /> {/* 💡 NOVA ROTA PÚBLICA */}
+
+          {/* ROTAS PRIVADAS (Painel Administrativo) */}
           <Route>
             <PrivateRoute>
               <MainLayout />

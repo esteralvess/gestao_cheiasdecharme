@@ -19,11 +19,8 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from datetime import datetime, date, timedelta 
 from django.db import transaction 
-import requests # 💡 Necessário para o Webhook
+import requests 
 import json
-
-# ... (Mantenha as ViewSets: User, Group, Permission, CurrentUser, Location, Staff, Service, Customer como estão) ...
-# Vou focar apenas na AppointmentViewSet que mudou a formatação do N8N
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.filter(is_superuser=False).order_by('username')
@@ -69,18 +66,24 @@ class LocationViewSet(viewsets.ModelViewSet):
     queryset = Location.objects.all()
     serializer_class = LocationSerializer
     permission_classes = [permissions.AllowAny]
+    authentication_classes = [] 
 
 class StaffViewSet(viewsets.ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
     permission_classes = [permissions.AllowAny]
+    authentication_classes = [] 
+    
     def get_queryset(self):
         queryset = super().get_queryset()
         show_inactive = self.request.query_params.get('show_inactive', 'false')
         if show_inactive.lower() != 'true':
             queryset = queryset.filter(active=True)
         return queryset.order_by('name')
+    
     def destroy(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+             return Response(status=status.HTTP_401_UNAUTHORIZED)
         instance = self.get_object()
         instance.active = False
         instance.save()
@@ -90,10 +93,13 @@ class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
     permission_classes = [permissions.AllowAny]
+    authentication_classes = [] 
 
 class CustomerViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
     permission_classes = [permissions.AllowAny]
+    authentication_classes = [] 
+
     def get_queryset(self):
         return Customer.objects.annotate(
             visits= F('previous_visits') + Count('appointment', filter=Q(appointment__status='completed'))
@@ -102,20 +108,28 @@ class CustomerViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='check-phone')
     def check_phone(self, request):
         phone = request.query_params.get('phone')
-        if not phone: return Response({"error": "Telefone é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+        if not phone:
+             return Response({"error": "Telefone é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
         try:
             customer = Customer.objects.get(whatsapp=phone)
-            return Response({"exists": True, "id": customer.id, "name": customer.full_name, "email": customer.email})
+            return Response({
+                "exists": True,
+                "id": customer.id,
+                "name": customer.full_name,
+                "email": customer.email
+            })
         except Customer.DoesNotExist:
             return Response({"exists": False})
 
     @action(detail=True, methods=['post'], url_path='redeem-points')
     def redeem_points(self, request, pk=None):
         customer = self.get_object()
-        points = request.data.get('points_to_redeem')
-        if not points or points <= 0: return Response({"error": "Pontos inválidos."}, status=400)
-        if customer.points < points: return Response({"error": "Pontos insuficientes."}, status=400)
-        customer.points -= points
+        points_to_redeem = request.data.get('points_to_redeem')
+        if not points_to_redeem or points_to_redeem <= 0:
+            return Response({"error": "Pontos inválidos."}, status=400)
+        if customer.points < points_to_redeem:
+            return Response({"error": "Pontos insuficientes."}, status=400)
+        customer.points -= points_to_redeem
         customer.save()
         return Response(self.get_serializer(customer).data)
         
@@ -128,10 +142,12 @@ class CustomerViewSet(viewsets.ModelViewSet):
         customer.save()
         return Response(self.get_serializer(customer).data)
 
+
 class AppointmentViewSet(viewsets.ModelViewSet):
     queryset = Appointment.objects.all()
     serializer_class = AppointmentSerializer
     permission_classes = [permissions.AllowAny]
+    authentication_classes = [] 
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
@@ -139,132 +155,123 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         
         # 1. Customer
         customer_id = data.get('customer')
-        c_name = data.pop('customer_name', None)
-        c_phone = data.pop('customer_phone', None)
-        c_email = data.pop('customer_email', None) or None
+        customer_name = data.pop('customer_name', None)
+        customer_phone = data.pop('customer_phone', None)
+        customer_email = data.pop('customer_email', None)
+        if customer_email == "": customer_email = None
 
-        if not customer_id and c_name and c_phone:
+        if not customer_id and customer_name and customer_phone:
             try:
-                customer = Customer.objects.get(whatsapp=c_phone) 
+                customer = Customer.objects.get(whatsapp=customer_phone) 
             except Customer.DoesNotExist:
-                customer = Customer.objects.create(full_name=c_name, whatsapp=c_phone, email=c_email, is_truly_new=True)
+                customer = Customer.objects.create(
+                    full_name=customer_name,
+                    whatsapp=customer_phone, 
+                    email=customer_email,
+                    is_truly_new=True 
+                )
             data['customer'] = customer.id 
         
         if not data.get('customer'):
-            return Response({"error": "Cliente obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Dados do cliente obrigatórios."}, status=400)
         
-        # 2. Items (Serviços)
+        # 2. Preparação dos Itens
         items = data.pop('items', [])
         if not items and data.get('service') and data.get('staff'):
             items = [{'service': data.get('service'), 'staff': data.get('staff')}]
         if not items:
-             return Response({"error": "Nenhum serviço selecionado."}, status=status.HTTP_400_BAD_REQUEST)
+             return Response({"error": "Nenhum serviço selecionado."}, status=400)
 
-        # 3. Location
+        # 3. Validação de Location
         if not data.get('location'):
             staff_id = items[0].get('staff')
             if staff_id:
                 staff_shift = StaffShift.objects.filter(staff_id=staff_id).first()
                 if staff_shift: data['location'] = staff_shift.location_id
-            
             if not data.get('location'):
-                loc = Location.objects.all().first()
-                if loc: data['location'] = loc.id
+                first_location = Location.objects.all().first()
+                if first_location: data['location'] = first_location.id
                 else: return Response({"error": "Localização obrigatória."}, status=400)
         
         try:
+            # Tempo inicial do PRIMEIRO serviço da sequência
             current_start_time = datetime.fromisoformat(data['start_time'].replace('Z', '+00:00'))
         except (ValueError, TypeError):
              return Response({"error": "Start time inválido."}, status=400)
 
         created_appointments = []
+        n8n_services_list = []
+        total_value_centavos = 0
         
         data.pop('service', None)
         data.pop('staff', None)
         data.pop('end_time', None)
 
-        # Variáveis para o N8N
-        n8n_services_list = []
-        total_value_centavos = 0
-
-        # 4. Loop SEQUENCIAL com numeração para N8N
+        # 4. Loop SEQUENCIAL
         for i, item in enumerate(items):
             service_id = item.get('service')
             staff_id = item.get('staff')
             
             try:
                 service_obj = Service.objects.get(pk=service_id)
-                staff_obj = Staff.objects.get(pk=staff_id) # Recupera objeto staff
-            except:
-                return Response({"error": "Dados inválidos."}, status=400)
+                staff_obj = Staff.objects.get(pk=staff_id)
+            except: return Response({"error": "Dados inválidos."}, status=400)
 
             if not StaffService.objects.filter(staff_id=staff_id, service_id=service_id).exists():
                  return Response({"error": f"{staff_obj.name} não realiza {service_obj.name}."}, status=400)
 
             duration = service_obj.default_duration_min or 30
+            
+            # Calcula o fim deste serviço
             appt_end_time = current_start_time + timedelta(minutes=duration)
 
-            # 💡 FORMATAÇÃO PARA N8N (Adiciona à lista de texto)
             total_value_centavos += (service_obj.price_centavos or 0)
             n8n_services_list.append(f"{i+1}. {service_obj.name} com {staff_obj.name}")
 
-            # Nota automática
             now = timezone.localtime(timezone.now())
             auto_note = f"Pré-agendamento via Site em {now.strftime('%d/%m/%Y às %H:%M')}."
-            existing = data.get('notes', '')
-            final_notes = f"{existing}\n{auto_note}" if existing else auto_note
+            existing_notes = data.get('notes', '')
+            final_notes = f"{existing_notes}\n{auto_note}" if existing_notes else auto_note
 
             appt_data = data.copy()
             appt_data['service'] = service_id
             appt_data['staff'] = staff_id
             appt_data['start_time'] = current_start_time.isoformat()
             appt_data['end_time'] = appt_end_time.isoformat()
-            appt_data['status'] = 'pending'
+            appt_data['status'] = 'pending' 
             appt_data['notes'] = final_notes
             
             serializer = self.get_serializer(data=appt_data)
             serializer.is_valid(raise_exception=True)
             created_appointments.append(serializer.save())
             
+            # 💡 CRÍTICO: O próximo serviço começa quando este termina
             current_start_time = appt_end_time 
 
-        # --- 5. DISPARO PARA O N8N (TEXTO FORMATADO) ---
+        # 5. Disparo N8N
         if created_appointments:
             try:
                 total_reais = total_value_centavos / 100
                 sinal_reais = total_reais * 0.10
-                
                 first_appt = created_appointments[0]
-                appt_date_str = first_appt.start_time.strftime("%d/%m/%Y")
-                appt_time_str = first_appt.start_time.strftime("%H:%M")
-                location_name = first_appt.location.name
-
-                # 💡 Converte a lista em string única com quebras de linha
-                services_text = "\n".join(n8n_services_list)
-
+                
                 n8n_payload = {
                     "customer_name": customer.full_name,
                     "customer_phone": customer.whatsapp,
-                    "appointment_date": appt_date_str,
-                    "appointment_time": appt_time_str,
-                    "location": location_name,
-                    "services": services_text, # 💡 Agora vai como texto formatado
+                    "appointment_date": first_appt.start_time.strftime("%d/%m/%Y"),
+                    "appointment_time": first_appt.start_time.strftime("%H:%M"),
+                    "location": first_appt.location.name,
+                    "services": "\n".join(n8n_services_list),
                     "total_value": f"R$ {total_reais:.2f}".replace('.', ','),
                     "signal_value": f"R$ {sinal_reais:.2f}".replace('.', ','),
                 }
-                
-                requests.post(
-                    "https://webhooks.gerenc.com/webhook/pre-agendamento", 
-                    json=n8n_payload, 
-                    timeout=3
-                )
+                requests.post("https://flow.gerenc.com/webhook-test/novo-agendamento", json=n8n_payload, timeout=3)
             except Exception as e:
-                print(f"Erro ao enviar webhook N8N: {e}")
+                print(f"Erro n8n: {e}")
 
             return Response(self.get_serializer(created_appointments[0]).data, status=status.HTTP_201_CREATED)
         else:
-             return Response({"error": "Erro ao criar agendamentos."}, status=500)
-
+             return Response({"error": "Erro ao criar."}, status=500)
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -293,10 +300,10 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                  )
         return response
 
-# ... (StaffShiftViewSet, StaffServiceViewSet, etc. mantidos iguais)
 class StaffShiftViewSet(viewsets.ModelViewSet):
     serializer_class = StaffShiftSerializer
     permission_classes = [permissions.AllowAny]
+    authentication_classes = [] 
     def get_queryset(self):
         queryset = StaffShift.objects.select_related('staff', 'location').all()
         staff_id = self.request.query_params.get('staff_id', None)
@@ -307,8 +314,8 @@ class StaffServiceViewSet(viewsets.ModelViewSet):
     queryset = StaffService.objects.all()
     serializer_class = StaffServiceSerializer
     permission_classes = [permissions.AllowAny]
-    def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
+    authentication_classes = [] 
+    def create(self, request, *args, **kwargs): return super().create(request, *args, **kwargs)
     @action(detail=False, methods=['delete'], url_path='delete-by-params')
     def delete_by_params(self, request):
         try:
@@ -318,18 +325,18 @@ class StaffServiceViewSet(viewsets.ModelViewSet):
 
 class StaffExceptionViewSet(viewsets.ModelViewSet):
     serializer_class = StaffExceptionSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.AllowAny] 
     def get_queryset(self): return StaffException.objects.all().order_by('-start_date')
 
 class StaffCommissionViewSet(viewsets.ModelViewSet):
     queryset = StaffCommission.objects.all()
     serializer_class = StaffCommissionSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.AllowAny] 
 
 class ReferralViewSet(viewsets.ModelViewSet):
     queryset = Referral.objects.all()
     serializer_class = ReferralSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.AllowAny] 
     @action(detail=True, methods=['post'], url_path='apply-reward')
     def apply_reward(self, request, pk=None):
         try:
@@ -342,10 +349,10 @@ class ReferralViewSet(viewsets.ModelViewSet):
 class ExpenseViewSet(viewsets.ModelViewSet):
     queryset = Expense.objects.all()
     serializer_class = ExpenseSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.AllowAny] 
 
 class RevenueByStaffReport(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated] 
     def get(self, request): return Response([]) 
 
 class RevenueByLocationReport(APIView):
