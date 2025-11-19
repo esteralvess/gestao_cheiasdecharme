@@ -103,11 +103,12 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Appointment
+        # Usamos uma lista explícita para garantir o campo write_only 'services'
         fields = [
             'id', 'customer', 'staff', 'service', 'location', 'start_time', 'end_time', 
             'google_calendar_event_id', 'status', 'notes', 'created_at', 'updated_at', 
             'cancelled_at', 'payment_method', 'discount_centavos', 'final_amount_centavos',
-            'customer_name', 'staff_name', 'service_name', 'location_name', 'services'
+            'customer_name', 'staff_name', 'service_name', 'location_name', 'services' # Campo write_only
         ]
         extra_kwargs = {
             'customer': {'required': False},
@@ -116,6 +117,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
             'location': {'required': False},
             'start_time': {'required': False},
             'end_time': {'required': False},
+            # ✅ Torna os novos campos opcionais na API, já que só são preenchidos no final
             'payment_method': {'required': False},
             'discount_centavos': {'required': False},
             'final_amount_centavos': {'required': False},
@@ -233,8 +235,8 @@ class StaffExceptionSerializer(serializers.ModelSerializer):
         if is_patch_status_only:
             fields_to_make_optional = ['staff_id', 'start_date', 'end_date', 'type', 'notes']
             
-            for field_name in self.fields:
-                if field_name in self.fields and field_name in fields_to_make_optional:
+            for field_name in fields_to_make_optional:
+                if field_name in self.fields:
                     self.fields[field_name].required = False
         
         return super().to_internal_value(data)

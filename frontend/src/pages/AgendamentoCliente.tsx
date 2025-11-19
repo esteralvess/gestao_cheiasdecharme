@@ -1,9 +1,9 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { format, isSameDay, addMinutes, setHours, setMinutes, setSeconds, isPast, getDay, startOfMonth, endOfMonth, eachDayOfInterval, endOfDay } from "date-fns"; 
+import { format, isSameDay, addMinutes, setHours, setMinutes, isPast, getDay, startOfMonth, endOfMonth, eachDayOfInterval, endOfDay } from "date-fns"; 
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
-import { appointmentsAPI, servicesAPI, staffAPI, staffShiftsAPI, staffServicesAPI, locationsAPI } from "@/services/api";
+import { appointmentsAPI, servicesAPI, staffAPI, staffShiftsAPI, staffServicesAPI, locationsAPI, customersAPI } from "@/services/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
@@ -11,7 +11,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, ArrowRight, Check, Scissors, User, Clock, MapPin } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Loader2, Check, Scissors, User, Clock, MapPin, CalendarCheck, Sparkles, ArrowRight } from "lucide-react";
 
 // --- INTERFACES E TIPOS ---
 interface Service { id: string; name: string; price_centavos: number; default_duration_min: number; }
@@ -22,159 +24,28 @@ interface StaffService { staff_id: string; service_id: string; }
 interface Appointment { id: string; staff: string; start_time: string; end_time: string; status: 'confirmed' | 'pending'; }
 
 // ----------------------------------------------------
-// LÓGICA DE DISPONIBILIDADE
+// FUNÇÕES AUXILIARES DE TELEFONE
 // ----------------------------------------------------
-
-const getAvailableSlots = (
-  selectedDate: Date,
-  selectedStaffId: string,
-  selectedLocationId: string,
-  serviceDurationMin: number,
-  staffShifts: StaffShift[],
-  allAppointments: Appointment[],
-): string[] => {
-  const dayOfWeek = getDay(selectedDate);
-  
-  const todayShifts = staffShifts.filter(s => 
-    s.staff_id === selectedStaffId && 
-    s.weekday === dayOfWeek &&
-    s.location_id === selectedLocationId
-  );
-
-  if (todayShifts.length === 0) return [];
-
-  const availableSlots: string[] = [];
-  const currentAppointments = allAppointments.filter(apt => 
-    apt.staff === selectedStaffId && 
-    isSameDay(new Date(apt.start_time), selectedDate) &&
-    (apt.status === 'confirmed' || apt.status === 'pending')
-  ).map(apt => ({
-    start: new Date(apt.start_time),
-    end: new Date(apt.end_time)
-  }));
-
-  for (const shift of todayShifts) {
-    const [shiftStartHour, shiftStartMinute] = shift.start_time.split(':').map(Number);
-    const [shiftEndHour, shiftEndMinute] = shift.end_time.split(':').map(Number);
-
-    let currentTime = setMinutes(setHours(selectedDate, shiftStartHour), shiftStartMinute);
-    const endTimeLimit = setMinutes(setHours(selectedDate, shiftEndHour), shiftEndMinute);
-
-    const now = new Date();
-    if (isSameDay(currentTime, now)) {
-        const startOfShift = currentTime.getTime();
-        const startOfNow = now.getTime();
-        
-        if (startOfNow > startOfShift) {
-            const elapsedMinutes = Math.floor((startOfNow - startOfShift) / (1000 * 60));
-            const blocksPassed = Math.ceil(elapsedMinutes / serviceDurationMin);
-            
-            let nextSlotStart = addMinutes(setSeconds(setMinutes(setHours(selectedDate, shiftStartHour), shiftStartMinute), 0), blocksPassed * serviceDurationMin);
-
-            if (nextSlotStart < endTimeLimit) {
-                currentTime = nextSlotStart;
-            } else {
-                continue;
-            }
-        }
+const formatPhoneNumber = (value: string) => {
+    const numbers = value.replace(/\D/g, "");
+    let coreNumber = numbers;
+    if (numbers.startsWith("55") && numbers.length > 11) {
+        coreNumber = numbers.substring(2);
     }
-    
-    while (addMinutes(currentTime, serviceDurationMin) <= endTimeLimit) {
-      const slotEnd = addMinutes(currentTime, serviceDurationMin);
-      let isBooked = false;
-
-      for (const apt of currentAppointments) {
-        if (currentTime < apt.end && slotEnd > apt.start) {
-          isBooked = true;
-          currentTime = apt.end;
-          break; 
-        }
-      }
-
-      if (!isBooked) {
-        const slotTime = format(currentTime, 'HH:mm');
-        availableSlots.push(slotTime);
-        currentTime = addMinutes(currentTime, serviceDurationMin);
-      }
-    }
-  }
-
-  return Array.from(new Set(availableSlots)).sort();
+    coreNumber = coreNumber.slice(0, 11);
+    if (coreNumber.length === 0) return "";
+    let formatted = "+55";
+    if (coreNumber.length > 0) formatted += ` (${coreNumber.substring(0, 2)}`;
+    if (coreNumber.length > 2) formatted += `) ${coreNumber.substring(2, 7)}`;
+    if (coreNumber.length > 7) formatted += `-${coreNumber.substring(7, 11)}`;
+    return formatted;
 };
 
-
-const curateAvailableSlots = (
-  allSlots: string[],
-  selectedDate: Date,
-): string[] => {
-  if (allSlots.length === 0) return [];
-
-  const MORNING_END = '12:00';
-  const AFTERNOON_END = '17:00';
-  
-  const morningSlots: string[] = [];
-  const afternoonSlots: string[] = [];
-  const eveningSlots: string[] = [];
-
-  allSlots.forEach(slot => {
-    if (slot < MORNING_END) {
-      morningSlots.push(slot);
-    } else if (slot < AFTERNOON_END) {
-      afternoonSlots.push(slot);
-    } else {
-      eveningSlots.push(slot);
-    }
-  });
-
-  const selectedSlots = new Set<string>();
-  
-  const addSpacedSlots = (slots: string[], count: number) => {
-    if (slots.length === 0) return;
-    
-    selectedSlots.add(slots[0]);
-
-    if (slots.length <= count) {
-        slots.forEach(slot => selectedSlots.add(slot));
-        return;
-    }
-    
-    selectedSlots.add(slots[slots.length - 1]);
-    selectedSlots.add(slots[Math.floor(slots.length / 2)]);
-  };
-
-  addSpacedSlots(morningSlots, 3);
-  addSpacedSlots(afternoonSlots, 3);
-  addSpacedSlots(eveningSlots, 3);
-
-  
-  const isToday = isSameDay(selectedDate, new Date());
-  
-  const nowTime = format(new Date(), 'HH:mm');
-  let closestSlotIndex = -1;
-
-  if (isToday) {
-      closestSlotIndex = allSlots.findIndex(slot => slot >= nowTime);
-  } else {
-      closestSlotIndex = 0;
-  }
-
-  if (closestSlotIndex !== -1) {
-      if (allSlots[closestSlotIndex]) {
-          selectedSlots.add(allSlots[closestSlotIndex]);
-      }
-      
-      for (let i = -2; i <= 2; i++) {
-          const index = closestSlotIndex + i;
-          if (index >= 0 && index < allSlots.length) {
-              selectedSlots.add(allSlots[index]);
-          }
-      }
-  }
-
-
-  return Array.from(selectedSlots).sort();
+const getRawPhone = (formatted: string) => {
+    const nums = formatted.replace(/\D/g, "");
+    if (nums.startsWith("55")) return nums;
+    return `55${nums}`;
 };
-
 
 // ----------------------------------------------------
 // COMPONENTE PRINCIPAL
@@ -183,9 +54,11 @@ const curateAvailableSlots = (
 export default function AgendamentoCliente() {
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
+  const [isCheckingPhone, setIsCheckingPhone] = useState(false);
+  
   const [formData, setFormData] = useState({
     selectedServiceIds: [] as string[], 
-    staffId: '', 
+    serviceStaffMapping: {} as Record<string, string>, 
     locationId: '', 
     date: new Date(), 
     time: '',
@@ -194,7 +67,7 @@ export default function AgendamentoCliente() {
     customerEmail: ''
   });
 
-  // 1. Fetch de Dados Essenciais
+  // Queries
   const { data: services = [] } = useQuery<Service[]>({ queryKey: ['services'], queryFn: servicesAPI.getAll });
   const { data: allStaff = [] } = useQuery<Staff[]>({ queryKey: ['staff'], queryFn: staffAPI.getAll });
   const { data: staffServices = [] } = useQuery<StaffService[]>({ queryKey: ['staffServices'], queryFn: staffServicesAPI.getAll });
@@ -202,463 +75,565 @@ export default function AgendamentoCliente() {
   const { data: allAppointments = [] } = useQuery<Appointment[]>({ queryKey: ['appointments'], queryFn: appointmentsAPI.getAll }); 
   const { data: locations = [] } = useQuery<Location[]>({ queryKey: ['locations'], queryFn: locationsAPI.getAll });
 
-  // 2. Valores Computados
+  // Computados
   const selectedServices = useMemo(() => 
     services.filter(s => formData.selectedServiceIds.includes(s.id)), 
     [formData.selectedServiceIds, services]
   );
   
+  const orderedServices = useMemo(() => {
+      return formData.selectedServiceIds.map(id => services.find(s => s.id === id)!).filter(Boolean);
+  }, [formData.selectedServiceIds, services]);
+
   const totalDuration = useMemo(() => 
     selectedServices.reduce((sum, s) => sum + (s.default_duration_min || 0), 0), 
     [selectedServices]
   );
-  const serviceDuration = totalDuration || 60;
-
+  
   const totalPrice = useMemo(() => 
     selectedServices.reduce((sum, s) => sum + (s.price_centavos || 0), 0), 
     [selectedServices]
   );
   const formattedPrice = (totalPrice / 100).toFixed(2).replace('.', ',');
-
   const selectedLocation = useMemo(() => locations.find(l => l.id === formData.locationId), [formData.locationId, locations]);
 
+  // Handlers
   const handleServiceToggle = (serviceId: string) => {
     setFormData(f => {
         const currentIds = f.selectedServiceIds;
         const isSelected = currentIds.includes(serviceId);
+        const newIds = isSelected ? currentIds.filter(id => id !== serviceId) : [...currentIds, serviceId];
         
-        if (isSelected) {
-            return {
-                ...f,
-                selectedServiceIds: currentIds.filter(id => id !== serviceId),
-                staffId: currentIds.length === 1 ? '' : f.staffId,
-                locationId: currentIds.length === 1 ? '' : f.locationId,
-                time: ''
-            };
-        } 
-        else {
-            return {
-                ...f,
-                selectedServiceIds: [...currentIds, serviceId]
-            };
-        }
+        const newMapping = { ...f.serviceStaffMapping };
+        if (isSelected) delete newMapping[serviceId];
+
+        return { ...f, selectedServiceIds: newIds, serviceStaffMapping: newMapping, time: '' };
     });
   };
 
+  const handleStaffSelect = (serviceId: string, staffId: string) => {
+      setFormData(f => ({
+          ...f,
+          serviceStaffMapping: { ...f.serviceStaffMapping, [serviceId]: staffId },
+          time: ''
+      }));
+  };
 
-  const staffAvailableForService = useMemo(() => {
-    if (formData.selectedServiceIds.length === 0) return [];
-    
-    let eligibleStaffIds: string[] = [];
+  const getStaffForService = (serviceId: string) => {
+      if (!formData.locationId) return [];
+      const staffWhoDoService = staffServices.filter(ss => ss.service_id === serviceId).map(ss => ss.staff_id);
+      const staffAtLocation = new Set(staffShifts.filter(s => s.location_id === formData.locationId).map(s => s.staff_id));
+      return allStaff.filter(s => staffWhoDoService.includes(s.id) && staffAtLocation.has(s.id));
+  };
 
-    // 1. Intersecção de Staffs que podem fazer TODOS os serviços
-    formData.selectedServiceIds.forEach((serviceId, index) => {
-      const staffIdsForThisService = staffServices
-        .filter(ss => ss.service_id === serviceId)
-        .map(ss => ss.staff_id);
-        
-      if (index === 0) {
-        eligibleStaffIds = staffIdsForThisService;
-      } else {
-        // Intercepta (mantém apenas os IDs que podem fazer o serviço anterior E o atual)
-        eligibleStaffIds = eligibleStaffIds.filter(id => staffIdsForThisService.includes(id));
-      }
-    });
-    
-    if (eligibleStaffIds.length === 0) return [];
-
-    // 2. Filtra a lista de Staff pelo Service Intersection
-    let availableStaff = allStaff.filter(s => eligibleStaffIds.includes(s.id));
-
-    // 3. Filtra por localização (SE uma localização foi selecionada)
-    if (formData.locationId) {
-        const staffIdsForLocation = new Set(staffShifts
-            .filter(s => s.location_id === formData.locationId)
-            .map(s => s.staff_id)
-        );
-        // Mantém apenas os profissionais que fazem o Serviço E estão na lista de staffIdsForLocation
-        availableStaff = availableStaff.filter(s => staffIdsForLocation.has(s.id));
-    }
-    
-    // Garantimos que o staffId seja resetado se o profissional selecionado não estiver mais na lista de elegíveis.
-    if (formData.staffId && !availableStaff.map(s => s.id).includes(formData.staffId)) {
-        setFormData(f => ({ ...f, staffId: '' }));
-    }
-
-
-    return availableStaff;
-  }, [formData.selectedServiceIds, formData.locationId, allStaff, staffServices, staffShifts]);
-  
-  const availableDays = useMemo(() => {
-    if (formData.selectedServiceIds.length === 0 || !formData.locationId) return new Set<string>();
-
-    const availableStaffIds = staffAvailableForService.map(s => s.id);
-    const availableDates = new Set<string>();
-
-    const monthStart = startOfMonth(formData.date);
-    const monthEnd = endOfMonth(formData.date);
-    
-    const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
-    
-    daysInMonth.forEach(day => {
-        const dayOfWeek = getDay(day);
-
-        const staffHasShift = availableStaffIds.some(staffId => {
-            return staffShifts.some(shift => 
-                shift.staff_id === staffId && 
-                shift.location_id === formData.locationId &&
-                shift.weekday === dayOfWeek
-            );
-        });
-
-        if (staffHasShift && !isPast(endOfDay(day))) {
-            availableDates.add(format(day, 'yyyy-MM-dd'));
-        }
-    });
-
-    return availableDates;
-  }, [formData.selectedServiceIds.length, formData.locationId, formData.date, staffAvailableForService, staffShifts]);
-
-
+  // LÓGICA DE DISPONIBILIDADE SEQUENCIAL (CASCATA)
   const availableSlots = useMemo(() => {
-    if (!formData.staffId || !formData.date || formData.selectedServiceIds.length === 0 || !formData.locationId) return []; 
-    
-    const dateToSearch = setHours(setMinutes(formData.date, 0), 0);
+      if (orderedServices.length === 0 || !formData.date || !formData.locationId) return [];
+      if (Object.keys(formData.serviceStaffMapping).length < orderedServices.length) return [];
 
-    const allGeneratedSlots = getAvailableSlots(
-      dateToSearch,
-      formData.staffId,
-      formData.locationId,
-      serviceDuration,
-      staffShifts as unknown as StaffShift[], 
-      allAppointments as unknown as Appointment[]
-    );
-    
-    return curateAvailableSlots(allGeneratedSlots, dateToSearch);
+      const dayOfWeek = getDay(formData.date);
+      
+      const firstService = orderedServices[0];
+      const firstStaffId = formData.serviceStaffMapping[firstService.id];
+      const firstStaffShifts = staffShifts.filter(s => s.staff_id === firstStaffId && s.weekday === dayOfWeek && s.location_id === formData.locationId);
+      
+      const validStartTimes = new Set<string>();
 
-  }, [formData.staffId, formData.locationId, formData.date, formData.selectedServiceIds.length, serviceDuration, staffShifts, allAppointments]);
+      firstStaffShifts.forEach(shift => {
+          const [sh, sm] = shift.start_time.split(':').map(Number);
+          const [eh, em] = shift.end_time.split(':').map(Number);
+          let current = setMinutes(setHours(formData.date, sh), sm);
+          const shiftEnd = setMinutes(setHours(formData.date, eh), em);
 
-  // 3. Mutação de Agendamento
+          const now = new Date();
+          if (isSameDay(current, now) && current < now) {
+             const minutesNow = now.getHours() * 60 + now.getMinutes();
+             const blocks = Math.ceil((minutesNow - (sh * 60 + sm)) / 30);
+             current = addMinutes(current, blocks * 30);
+          }
+
+          while (current < shiftEnd) {
+              let isValidChain = true;
+              let chainPointer = current;
+
+              for (const srv of orderedServices) {
+                  const srvStaffId = formData.serviceStaffMapping[srv.id];
+                  const srvDur = srv.default_duration_min || 30;
+                  const srvEnd = addMinutes(chainPointer, srvDur);
+
+                  const staffHasShift = staffShifts.some(s => 
+                      s.staff_id === srvStaffId && 
+                      s.weekday === dayOfWeek && 
+                      s.location_id === formData.locationId &&
+                      s.start_time <= format(chainPointer, 'HH:mm:ss') &&
+                      s.end_time >= format(srvEnd, 'HH:mm:ss')
+                  );
+
+                  if (!staffHasShift) { isValidChain = false; break; }
+
+                  const conflict = allAppointments.some(a => 
+                      a.staff === srvStaffId && 
+                      isSameDay(new Date(a.start_time), formData.date) &&
+                      (
+                          (chainPointer >= new Date(a.start_time) && chainPointer < new Date(a.end_time)) ||
+                          (srvEnd > new Date(a.start_time) && srvEnd <= new Date(a.end_time)) ||
+                          (chainPointer <= new Date(a.start_time) && srvEnd >= new Date(a.end_time))
+                      )
+                  );
+
+                  if (conflict) { isValidChain = false; break; }
+
+                  chainPointer = srvEnd;
+              }
+
+              if (isValidChain) {
+                  validStartTimes.add(format(current, 'HH:mm'));
+              }
+              current = addMinutes(current, 30);
+          }
+      });
+      
+      return Array.from(validStartTimes).sort();
+  }, [formData, staffShifts, allAppointments, orderedServices]);
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      let val = e.target.value.replace(/\D/g, "");
+      if (val.length > 11) val = val.slice(0, 11);
+      let formatted = val;
+      if (val.length > 2) formatted = `(${val.slice(0,2)}) ${val.slice(2)}`;
+      if (val.length > 7) formatted = `(${val.slice(0,2)}) ${val.slice(2,7)}-${val.slice(7)}`;
+      setFormData(f => ({...f, customerPhone: formatted}));
+  };
+
+  const handlePhoneBlur = async () => {
+      const raw = getRawPhone(formData.customerPhone);
+      if (raw.length < 12) return; 
+      setIsCheckingPhone(true);
+      try {
+          const response = await customersAPI.checkPhone(raw);
+          if (response.exists) {
+              setFormData(f => ({
+                  ...f,
+                  customerName: response.name,
+                  customerEmail: response.email || f.customerEmail
+              }));
+              toast.info(`Bem-vinda de volta, ${response.name.split(' ')[0]}!`);
+          }
+      } catch (error) {
+          console.error("Erro ao verificar telefone", error);
+      } finally {
+          setIsCheckingPhone(false);
+      }
+  };
+
   const createAppointmentMutation = useMutation({
     mutationFn: (payload: any) => appointmentsAPI.create(payload),
     onSuccess: () => {
-      toast.success("Agendamento criado com sucesso! Aguarde a confirmação.");
-      queryClient.invalidateQueries({ queryKey: ['appointments'] });
-      setStep(5);
+        toast.success("Solicitação de agendamento enviada!", {
+            description: "Verifique seu WhatsApp para o pagamento do sinal."
+        });
+        setStep(5);
+        queryClient.invalidateQueries({ queryKey: ['appointments'] });
     },
-    onError: (error: any) => {
-      toast.error(error.message || "Falha ao criar agendamento. Tente novamente.");
-    }
+    onError: (err: any) => toast.error(err.message || "Erro ao agendar.")
   });
 
-  const handleNextStep = (nextStep: number) => {
-    if (nextStep === 2 && formData.selectedServiceIds.length === 0) return toast.error("Selecione pelo menos um serviço primeiro.");
-    if (nextStep === 3 && (!formData.locationId || !formData.staffId || !formData.date)) return toast.error("Selecione um local, profissional e uma data.");
-    if (nextStep === 4 && !formData.time) return toast.error("Selecione um horário disponível.");
-    
-    setStep(nextStep);
-  };
-  
-  const handleFinalizeBooking = () => {
-    if (!formData.customerName || !formData.customerPhone) {
-      return toast.error("Nome e telefone do cliente são obrigatórios.");
-    }
-    
-    const [hour, minute] = formData.time.split(':').map(Number);
-    const finalStartTime = setMinutes(setHours(formData.date, hour), minute);
-    const finalEndTime = addMinutes(finalStartTime, serviceDuration);
+  const handleFinalize = () => {
+      const [h, m] = formData.time.split(':').map(Number);
+      const start = setMinutes(setHours(formData.date, h), m);
+      
+      const items = orderedServices.map(s => ({
+          service: s.id,
+          staff: formData.serviceStaffMapping[s.id]
+      }));
 
-    const payload = {
-        customer_name: formData.customerName.trim(), 
-        customer_phone: formData.customerPhone.trim(),
-        customer_email: formData.customerEmail.trim(),
-        
-        service: formData.selectedServiceIds[0], // Campo 'service' (ID do primeiro serviço)
-        services: formData.selectedServiceIds, // Enviando o array completo
-        staff: formData.staffId,
-        location: formData.locationId, 
-        start_time: finalStartTime.toISOString(),
-        end_time: finalEndTime.toISOString(),
-        status: 'pending',
-    };
-    
-    createAppointmentMutation.mutate(payload);
+      const rawNumbers = formData.customerPhone.replace(/\D/g, "");
+      const fullPhone = `55${rawNumbers}`;
+
+      createAppointmentMutation.mutate({
+          customer_name: formData.customerName,
+          customer_phone: fullPhone, 
+          customer_email: formData.customerEmail,
+          location: formData.locationId,
+          start_time: start.toISOString(),
+          items: items
+      });
   };
 
-  const StepIndicator = ({ currentStep }: { currentStep: number }) => (
-    <div className="flex justify-between items-center mb-8">
-      {[1, 2, 3, 4].map(s => (
-        <div key={s} className="flex flex-col items-center flex-1">
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${
-            s < currentStep ? 'bg-primary text-white' : s === currentStep ? 'bg-primary/50 text-white' : 'bg-muted text-muted-foreground'
-          }`}>
-            {s < currentStep ? <Check className="w-4 h-4" /> : s}
-          </div>
-          <p className="text-sm mt-1 text-center text-muted-foreground hidden sm:block">
-            {s === 1 ? 'Serviço' : s === 2 ? 'Profissional' : s === 3 ? 'Horário' : 'Seus Dados'}
-          </p>
-        </div>
-      ))}
-    </div>
-  );
+  const handleNextStep = () => {
+      if (step === 1) {
+          if (formData.selectedServiceIds.length === 0) {
+              toast.error("Selecione pelo menos um serviço.");
+              return;
+          }
+          setStep(2);
+      } 
+      else if (step === 2) {
+          if (!formData.locationId) {
+              toast.error("Selecione a unidade de atendimento.");
+              return;
+          }
+          const allServicesHaveStaff = formData.selectedServiceIds.every(sId => formData.serviceStaffMapping[sId]);
+          if (!allServicesHaveStaff) {
+              toast.error("Selecione um profissional para cada serviço.");
+              return;
+          }
+          if (!formData.date) {
+              toast.error("Selecione uma data.");
+              return;
+          }
+          setStep(3);
+      }
+      else if (step === 3) {
+          if (!formData.time) {
+              toast.error("Selecione um horário.");
+              return;
+          }
+          setStep(4);
+      }
+  };
 
+  // --- RENDERIZAÇÃO ---
   const renderStepContent = () => {
-    // Funções auxiliares para formatar os dados
-    const renderBold = (text: string | undefined) => <span className="font-semibold">{text || 'N/A'}</span>;
-    const selectedStaff = allStaff.find(s => s.id === formData.staffId)?.name;
-    const selectedServicesNames = selectedServices.map(s => s.name);
-    
-    switch (step) {
-      case 1:
-        return (
-          <div className="space-y-4">
-            <h2 className="text-xl font-semibold flex items-center gap-2"><Scissors className="w-5 h-5" /> Selecione o(s) Serviço(s)</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {services.map(s => (
-                <Card 
-                  key={s.id} 
-                  className={`p-4 cursor-pointer hover:border-primary transition-colors relative ${
-                    formData.selectedServiceIds.includes(s.id) 
-                      ? 'border-2 border-primary bg-primary/10' 
-                      : 'border'
-                  }`}
-                  onClick={() => handleServiceToggle(s.id)}
-                >
-                  <h3 className="font-semibold">{s.name}</h3>
-                  {formData.selectedServiceIds.includes(s.id) && (
-                      <Check className="w-5 h-5 text-primary absolute top-2 right-2" />
-                  )}
-                  <p className="text-sm text-muted-foreground">R$ {(s.price_centavos / 100).toFixed(2).replace('.', ',')}</p>
-                  <p className="text-xs text-muted-foreground">{s.default_duration_min} min</p>
-                </Card>
-              ))}
-            </div>
-            
-            {formData.selectedServiceIds.length > 0 && (
-                <div className="mt-6 p-4 border rounded-lg bg-muted">
-                    <h3 className="font-semibold text-lg">Resumo do Pedido</h3>
-                    <p className="text-sm">Serviços: <span className="font-bold">{selectedServicesNames.join(' + ')}</span></p>
-                    <p className="text-sm">Duração Total: <span className="font-bold">{totalDuration} minutos</span></p>
-                    <p className="text-sm">Valor Total: <span className="font-bold">R$ {formattedPrice}</span></p>
-                </div>
-            )}
-          </div>
-        );
-      case 2:
-        return (
-          <div className="space-y-4">
-            <h2 className="text-xl font-semibold flex items-center gap-2"><User className="w-5 h-5" /> Profissional e Data</h2>
-            
-            <div className="flex flex-col lg:flex-row gap-6">
-                
-                <div className="lg:w-1/3 space-y-4">
-                    {/* CAMPO: Localização */}
-                    <Label className="flex items-center gap-1"><MapPin className="w-4 h-4" /> Local de Atendimento</Label>
-                    <Select 
-                        value={formData.locationId} 
-                        onValueChange={(value) => setFormData(f => ({ ...f, locationId: value, staffId: '', time: '' }))}
-                        disabled={locations.length === 0}
-                    >
-                        <SelectTrigger><SelectValue placeholder="Selecione a unidade..." /></SelectTrigger>
-                        <SelectContent>
-                            {locations.map(l => (
-                                <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-
-                    {/* CAMPO: Profissional */}
-                    <Label className="flex items-center gap-1"><User className="w-4 h-4" /> Selecione um Profissional</Label>
-                    <Select 
-                        value={formData.staffId} 
-                        onValueChange={(value) => setFormData(f => ({ ...f, staffId: value, time: '' }))}
-                        disabled={staffAvailableForService.length === 0 || !formData.locationId}
-                    >
-                        <SelectTrigger><SelectValue placeholder="Selecione..." /></SelectTrigger>
-                        <SelectContent>
-                            {staffAvailableForService.map(s => (
-                                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
+      const renderBold = (text: string | undefined) => <span className="font-semibold">{text || 'N/A'}</span>;
+      
+      switch(step) {
+          case 1:
+            return (
+                <div className="space-y-6">
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-xl font-semibold flex items-center gap-2">
+                            <Scissors className="w-5 h-5 text-primary" /> Selecione os Serviços
+                        </h2>
+                        {formData.selectedServiceIds.length > 0 && (
+                            <Badge variant="secondary">{formData.selectedServiceIds.length} selecionado(s)</Badge>
+                        )}
+                    </div>
                     
-                    {/* 💡 ALERTA MELHORADO PARA CONFLITO MULTI-PROFISSIONAL */}
-                    {staffAvailableForService.length === 0 && formData.selectedServiceIds.length > 0 && formData.locationId && (
-                        <Alert variant="destructive">
-                            <AlertDescription className="text-sm">
-                                ❌ **Conflito de Profissionais:** Nenhum profissional pode realizar TODOS os serviços selecionados (ex: Massagem + Manicure). 
-                                <br />
-                                Por favor, **remova o serviço que gera conflito** e faça um agendamento separado para ele.
-                            </AlertDescription>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {services.map(s => (
+                            <Card key={s.id} 
+                                className={`p-4 cursor-pointer relative transition-all duration-200 ${
+                                    formData.selectedServiceIds.includes(s.id) 
+                                    ? 'border-primary border-2 bg-primary/5 shadow-sm' 
+                                    : 'border hover:border-primary/50'
+                                }`}
+                                onClick={() => handleServiceToggle(s.id)}>
+                                <div className="flex justify-between items-start mb-2">
+                                    <h3 className="font-semibold pr-6">{s.name}</h3>
+                                    {formData.selectedServiceIds.includes(s.id) && (
+                                        <div className="bg-primary text-primary-foreground rounded-full p-0.5 absolute top-3 right-3">
+                                            <Check className="w-3 h-3" />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="flex justify-between items-center text-sm text-muted-foreground">
+                                    <span>{s.default_duration_min} min</span>
+                                    <span className="font-medium text-foreground">R$ {(s.price_centavos/100).toFixed(2).replace('.', ',')}</span>
+                                </div>
+                            </Card>
+                        ))}
+                    </div>
+                    
+                    {formData.selectedServiceIds.length > 0 && (
+                        <Alert className="bg-muted/50 border-none">
+                            <div className="flex justify-between items-center w-full">
+                                <div className="text-sm">
+                                    <span className="text-muted-foreground">Total Estimado: </span>
+                                    <span className="font-semibold text-foreground">R$ {formattedPrice}</span>
+                                </div>
+                                <div className="text-sm">
+                                    <span className="text-muted-foreground">Duração: </span>
+                                    <span className="font-semibold text-foreground">{totalDuration} min</span>
+                                </div>
+                            </div>
                         </Alert>
                     )}
-                    {formData.selectedServiceIds.length === 0 && <p className="text-sm text-muted-foreground">Selecione o(s) serviço(s) para ver os profissionais elegíveis.</p>}
-                    {formData.selectedServiceIds.length > 0 && !formData.locationId && <p className="text-sm text-muted-foreground">Selecione o local para ver os profissionais disponíveis.</p>}
                 </div>
-                
-                {/* Coluna do Calendário (Centralizada) */}
-                <div className="lg:w-2/3 flex justify-center">
-                    <Card className="p-2 inline-block">
-                        <Label>Selecione a Data</Label>
-                        <Calendar 
-                            mode="single" 
-                            selected={formData.date} 
-                            onSelect={(d) => d && setFormData(f => ({ ...f, date: d, time: '' }))}
-                            locale={ptBR}
-                            disabled={(date) => {
-                                const isDayInThePast = isPast(date) && !isSameDay(date, new Date());
-                                
-                                if (formData.locationId && formData.selectedServiceIds.length > 0) {
-                                    const dateKey = format(date, 'yyyy-MM-dd');
-                                    const hasAvailability = availableDays.has(dateKey);
-                                    return isDayInThePast || !hasAvailability;
-                                }
-                                
-                                return isDayInThePast;
-                            }}
-                            initialFocus
-                        />
-                    </Card>
+            );
+
+          case 2:
+            return (
+                <div className="space-y-6">
+                     <h2 className="text-xl font-semibold flex items-center gap-2">
+                        <User className="w-5 h-5 text-primary" /> Profissionais e Data
+                     </h2>
+                     
+                     <div className="grid gap-6 md:grid-cols-2">
+                        <div className="space-y-5">
+                            <div className="space-y-2">
+                                <Label>Unidade de Atendimento</Label>
+                                <Select value={formData.locationId} onValueChange={v => setFormData(f => ({...f, locationId: v, serviceStaffMapping: {}, time: ''}))}>
+                                    <SelectTrigger><SelectValue placeholder="Selecione a unidade" /></SelectTrigger>
+                                    <SelectContent>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                                </Select>
+                            </div>
+
+                            {formData.locationId && (
+                                <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                                    <Label className="text-muted-foreground text-xs uppercase tracking-wider">Quem vai te atender?</Label>
+                                    {orderedServices.map(service => {
+                                        const staffList = getStaffForService(service.id);
+                                        return (
+                                            <div key={service.id} className="space-y-1.5">
+                                                <Label className="text-sm font-medium">{service.name}</Label>
+                                                <Select 
+                                                   value={formData.serviceStaffMapping[service.id] || ''} 
+                                                   onValueChange={v => handleStaffSelect(service.id, v)}
+                                                >
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="Escolha o profissional" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {staffList.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                                                    </SelectContent>
+                                                </Select>
+                                                {staffList.length === 0 && <p className="text-xs text-red-500">Sem profissionais disponíveis nesta unidade.</p>}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex justify-center items-start">
+                            {Object.keys(formData.serviceStaffMapping).length === formData.selectedServiceIds.length && formData.selectedServiceIds.length > 0 ? (
+                                <div className="border rounded-lg p-4 shadow-sm animate-in zoom-in-95">
+                                    <Calendar 
+                                        mode="single" 
+                                        selected={formData.date} 
+                                        onSelect={d => d && setFormData(f => ({...f, date: d, time: ''}))} 
+                                        locale={ptBR} 
+                                        disabled={d => isPast(d) && !isSameDay(d, new Date())} 
+                                        className="rounded-md border-none"
+                                    />
+                                </div>
+                            ) : (
+                                <div className="h-full flex items-center justify-center text-center p-6 border-2 border-dashed rounded-lg text-muted-foreground bg-muted/10">
+                                    <p className="text-sm">Selecione a unidade e os profissionais para ver o calendário.</p>
+                                </div>
+                            )}
+                        </div>
+                     </div>
                 </div>
-            </div>
-          </div>
-        );
-      case 3:
-        return (
-          <div className="space-y-6">
-            <h2 className="text-xl font-semibold flex items-center gap-2"><Clock className="w-5 h-5" /> Selecione o Horário</h2>
-            {/* LAYOUT E FORMATAÇÃO SOLICITADOS - Etapa 3 */}
-            <Alert variant="default">
-                <AlertDescription className="text-base leading-snug space-y-1">
-                    <p className="font-bold">Serviços:</p>
-                    <div className="ml-4 space-y-1">
-                        {selectedServices.map((s) => (
-                            <p key={s.id}>{renderBold(s.name)} ({renderBold(s.default_duration_min + ' min')})</p>
-                        ))}
-                    </div>
-                    <p>Profissional: {renderBold(selectedStaff)}</p>
-                    <p>Unidade: {renderBold(selectedLocation?.name)}</p>
-                    <p>Data: {renderBold(format(formData.date, 'EEEE, dd/MM', { locale: ptBR }))}</p>
-                    <p>Duração Total: {renderBold(totalDuration + ' minutos')}</p>
-                </AlertDescription>
-            </Alert>
-            <div className="grid grid-cols-3 md:grid-cols-6 lg:grid-cols-8 gap-2">
-              {availableSlots.length > 0 ? (
-                availableSlots.map(slot => (
-                  <Button 
-                    key={slot} 
-                    variant={formData.time === slot ? 'default' : 'outline'}
-                    onClick={() => setFormData(f => ({ ...f, time: slot }))}
-                    className="flex-col h-auto py-2"
-                  >
-                    <span className="text-lg font-bold">{slot}</span>
-                  </Button>
-                ))
-              ) : (
-                <p className="col-span-full text-center text-muted-foreground py-4">Nenhum horário disponível para a data, local e profissional selecionados.</p>
-              )}
-            </div>
-          </div>
-        );
-      case 4:
-        return (
-          <div className="space-y-6">
-            <h2 className="text-xl font-semibold flex items-center gap-2"><User className="w-5 h-5" /> Seus Dados</h2>
-            {/* LAYOUT E FORMATAÇÃO SOLICITADOS - Etapa 4 (Final) */}
-            <Alert variant="default">
-                <AlertDescription className="text-base leading-snug space-y-1">
-                    <p className="font-bold">Serviços:</p>
-                    <div className="ml-4 space-y-1">
-                        {selectedServices.map((s, index) => (
-                            <p key={s.id}>{index + 1}: {renderBold(s.name)}</p>
-                        ))}
-                    </div>
-                    <p>Profissional: {renderBold(selectedStaff)}</p>
-                    <p>Unidade: {renderBold(selectedLocation?.name)}</p>
-                    <p>Data e Horário: {renderBold(`${format(formData.date, 'dd/MM', { locale: ptBR })} às ${formData.time}`)}</p>
-                    <p>Duração Total: {renderBold(totalDuration + ' minutos')}</p>
-                    <p>Valor Total: {renderBold(`R$ ${formattedPrice}`)}</p>
-                </AlertDescription>
-            </Alert>
-            <div className="grid gap-4">
-                <div>
-                    <Label htmlFor="customerName">Seu Nome Completo *</Label>
-                    <Input id="customerName" value={formData.customerName} onChange={e => setFormData(f => ({ ...f, customerName: e.target.value }))} />
-                </div>
-                <div>
-                    <Label htmlFor="customerPhone">Telefone (Whatsapp) *</Label>
-                    <Input id="customerPhone" value={formData.customerPhone} onChange={e => setFormData(f => ({ ...f, customerPhone: e.target.value }))} placeholder="(XX) XXXXX-XXXX" />
-                </div>
-                <div>
-                    <Label htmlFor="customerEmail">E-mail (Opcional)</Label>
-                    <Input id="customerEmail" type="email" value={formData.customerEmail} onChange={e => setFormData(f => ({ ...f, customerEmail: e.target.value }))} />
-                </div>
-            </div>
-          </div>
-        );
-      case 5:
-        return (
-            <div className="text-center py-12 space-y-4">
-                <Check className="w-16 h-16 text-primary mx-auto" />
-                <h2 className="text-3xl font-bold">Agendamento Realizado!</h2>
-                <p className="text-muted-foreground max-w-md mx-auto">
-                    Seu pedido de agendamento foi enviado com sucesso. Você receberá uma confirmação no seu WhatsApp ou e-mail em breve.
-                </p>
-                <Button onClick={() => setStep(1)} className="mt-4">Novo Agendamento</Button>
-            </div>
-        )
-    }
+            );
+
+          case 3:
+             return (
+                 <div className="space-y-6">
+                     <h2 className="text-xl font-semibold flex items-center gap-2">
+                        <Clock className="w-5 h-5 text-primary" /> Horários Disponíveis
+                     </h2>
+                     <Alert>
+                         <AlertDescription>
+                             Os horários abaixo consideram a duração total dos serviços em sequência.
+                         </AlertDescription>
+                     </Alert>
+                     <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                         {availableSlots.map(slot => (
+                             <Button 
+                                key={slot} 
+                                variant={formData.time === slot ? 'default' : 'outline'} 
+                                onClick={() => setFormData(f => ({...f, time: slot}))}
+                                className="w-full"
+                             >
+                                 {slot}
+                             </Button>
+                         ))}
+                     </div>
+                     {availableSlots.length === 0 && (
+                         <div className="text-center py-8 text-muted-foreground bg-muted/20 rounded-lg">
+                             <p>Não há sequência de horários disponível para esses profissionais.</p>
+                             <Button variant="ghost" onClick={() => setStep(2)}>Tentar outra data</Button>
+                         </div>
+                     )}
+                 </div>
+             );
+
+          case 4:
+             return (
+                 <div className="space-y-6">
+                     <h2 className="text-xl font-semibold flex items-center gap-2">
+                        <CalendarCheck className="w-5 h-5 text-primary" /> Confirmar Agendamento
+                     </h2>
+                     
+                     <Card className="overflow-hidden border-2">
+                         <div className="bg-muted/40 p-4 border-b flex justify-between items-center">
+                             <div className="flex items-center gap-2">
+                                 <MapPin className="w-4 h-4 text-muted-foreground" />
+                                 <span className="font-medium">{selectedLocation?.name}</span>
+                             </div>
+                             <Badge variant="outline" className="bg-background">
+                                {format(formData.date, "dd 'de' MMMM", { locale: ptBR })} às {formData.time}
+                             </Badge>
+                         </div>
+
+                         <div className="p-6 space-y-6">
+                             <div className="space-y-3">
+                                 <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Serviços em Sequência</h3>
+                                 <div className="divide-y">
+                                     {orderedServices.map((s, idx) => {
+                                         const staffName = allStaff.find(st => st.id === formData.serviceStaffMapping[s.id])?.name;
+                                         return (
+                                             <div key={s.id} className="py-3 flex justify-between items-center first:pt-0 last:pb-0">
+                                                 <div>
+                                                     <div className="flex items-center gap-2">
+                                                         <Badge variant="outline" className="h-5 w-5 flex items-center justify-center p-0 text-xs">{idx + 1}</Badge>
+                                                         <p className="font-medium text-base">{s.name}</p>
+                                                     </div>
+                                                     <p className="text-sm text-muted-foreground flex items-center gap-1 ml-7">
+                                                        <User className="w-3 h-3" /> {staffName}
+                                                     </p>
+                                                 </div>
+                                                 <div className="text-right">
+                                                     <p className="font-medium text-sm">{s.default_duration_min} min</p>
+                                                     <p className="text-sm text-muted-foreground">R$ {(s.price_centavos/100).toFixed(2).replace('.', ',')}</p>
+                                                 </div>
+                                             </div>
+                                         )
+                                     })}
+                                 </div>
+                             </div>
+
+                             <Separator />
+
+                             <div className="flex justify-between items-end">
+                                 <div>
+                                     <p className="text-sm text-muted-foreground mb-1">Tempo Total Estimado</p>
+                                     <div className="flex items-baseline gap-1">
+                                         <Clock className="w-4 h-4 text-primary" />
+                                         <span className="text-xl font-bold">{totalDuration}</span>
+                                         <span className="text-sm font-medium text-muted-foreground">minutos</span>
+                                     </div>
+                                 </div>
+                                 <div className="text-right">
+                                     <p className="text-sm text-muted-foreground mb-1">Valor Total</p>
+                                     <p className="text-2xl font-bold text-primary">R$ {formattedPrice}</p>
+                                 </div>
+                             </div>
+                         </div>
+                     </Card>
+
+                     <div className="grid gap-4 pt-2">
+                         <div className="space-y-2">
+                             <Label htmlFor="phone">WhatsApp</Label>
+                             <div className="relative flex items-center">
+                                 <div className="absolute left-3 text-muted-foreground text-sm font-medium">+55</div>
+                                 <Input 
+                                    id="phone" 
+                                    placeholder="(11) 99999-9999" 
+                                    value={formData.customerPhone} 
+                                    onChange={handlePhoneChange} 
+                                    onBlur={handlePhoneBlur} 
+                                    disabled={isCheckingPhone}
+                                    className="pl-12"
+                                 />
+                                 {isCheckingPhone && (
+                                     <div className="absolute right-3">
+                                         <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                                     </div>
+                                 )}
+                             </div>
+                         </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label htmlFor="name">Nome Completo</Label>
+                                <Input id="name" placeholder="Digite seu nome" value={formData.customerName} onChange={e => setFormData(f => ({...f, customerName: e.target.value}))} />
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="email">E-mail (Opcional)</Label>
+                                <Input id="email" type="email" placeholder="seu@email.com" value={formData.customerEmail} onChange={e => setFormData(f => ({...f, customerEmail: e.target.value}))} />
+                            </div>
+                        </div>
+                     </div>
+                 </div>
+             );
+
+          case 5:
+             // 💡 MENSAGEM ATUALIZADA (PRÉ-AGENDAMENTO + SINAL)
+             return (
+                 <div className="flex flex-col items-center justify-center py-16 text-center animate-in fade-in zoom-in duration-500">
+                     <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6">
+                         <Check className="w-12 h-12 text-green-600" />
+                     </div>
+                     <h2 className="text-3xl font-bold text-green-800 mb-2">Pré-Agendamento Confirmado!</h2>
+                     <p className="text-muted-foreground max-w-md">
+                         Obrigado, <strong>{formData.customerName}</strong>. Seu horário está em pré-reserva. 
+                         <br/><br/>
+                         Enviamos os dados para pagamento do <strong>sinal (10%)</strong> no seu WhatsApp para confirmar o agendamento.
+                     </p>
+                     <div className="mt-8 space-x-4">
+                        <Button variant="outline" onClick={() => window.location.reload()}>Novo Agendamento</Button>
+                     </div>
+                 </div>
+             );
+      }
   };
 
-  if (step === 5) {
-      return (
-        <div className="p-6">
-            <Card className="p-8 max-w-xl mx-auto">
-                {renderStepContent()}
-            </Card>
-        </div>
-      );
-  }
-
-
   return (
-    <div className="p-6">
-      <h1 className="text-4xl font-extrabold text-center text-primary mb-10">Agendamento Online</h1>
-      
-      <Card className="p-8 max-w-4xl mx-auto">
-        <StepIndicator currentStep={step} />
-        
-        {renderStepContent()}
+      <div className="min-h-screen bg-gradient-to-b from-background to-muted/20 py-8 px-4">
+          <div className="max-w-3xl mx-auto">
+              <div className="text-center mb-10">
+                  <h1 className="text-3xl font-bold text-primary tracking-tight mb-2">Agendamento Online</h1>
+                  <p className="text-muted-foreground">Reserve seu horário de forma rápida e fácil</p>
+              </div>
+              
+              <Card className="p-6 md:p-8 shadow-lg border-t-4 border-t-primary">
+                  {step < 5 && (
+                      <div className="mb-8">
+                          <div className="flex justify-between text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">
+                              <span className={step >= 1 ? "text-primary" : ""}>Serviços</span>
+                              <span className={step >= 2 ? "text-primary" : ""}>Profissional</span>
+                              <span className={step >= 3 ? "text-primary" : ""}>Horário</span>
+                              <span className={step >= 4 ? "text-primary" : ""}>Confirmação</span>
+                          </div>
+                          <div className="h-2 bg-muted rounded-full overflow-hidden">
+                              <div 
+                                  className="h-full bg-primary transition-all duration-500 ease-out" 
+                                  style={{ width: `${(step / 4) * 100}%` }}
+                              />
+                          </div>
+                      </div>
+                  )}
 
-        <div className="mt-8 flex justify-between pt-4 border-t">
-          <Button 
-            variant="outline" 
-            onClick={() => setStep(step - 1)} 
-            disabled={step === 1 || createAppointmentMutation.isPending || formData.selectedServiceIds.length === 0}
-          >
-            Voltar
-          </Button>
+                  {renderStepContent()}
+                  
+                  {step < 5 && (
+                      <div className="flex justify-between mt-8 pt-6 border-t">
+                          <Button 
+                            variant="ghost" 
+                            onClick={() => setStep(s => s - 1)} 
+                            disabled={step === 1 || createAppointmentMutation.isPending}
+                          >
+                              Voltar
+                          </Button>
 
-          {step < 4 && (
-            <Button 
-                onClick={() => handleNextStep(step + 1)} 
-                disabled={step === 1 && formData.selectedServiceIds.length === 0 || step === 2 && (!formData.locationId || !formData.staffId) || step === 3 && !formData.time || createAppointmentMutation.isPending}
-            >
-              Próximo <ArrowRight className="w-4 h-4 ml-2" />
-            </Button>
-          )}
-
-          {step === 4 && (
-            <Button 
-                onClick={handleFinalizeBooking} 
-                disabled={!formData.customerName || !formData.customerPhone || createAppointmentMutation.isPending}
-            >
-              {createAppointmentMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
-              {createAppointmentMutation.isPending ? "Agendando..." : "Confirmar Agendamento"}
-            </Button>
-          )}
-        </div>
-      </Card>
-    </div>
+                          {step < 4 ? (
+                              <Button 
+                                onClick={handleNextStep} 
+                                disabled={createAppointmentMutation.isPending}
+                                className="pl-8 pr-6"
+                              >
+                                  Próximo <ArrowRight className="ml-2 w-4 h-4" />
+                              </Button>
+                          ) : (
+                              <Button 
+                                onClick={handleFinalize} 
+                                disabled={
+                                    !formData.customerName || 
+                                    !formData.customerPhone || 
+                                    createAppointmentMutation.isPending
+                                }
+                                className="bg-green-600 hover:bg-green-700 text-white pl-8 pr-6"
+                              >
+                                  {createAppointmentMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 w-4 h-4" />}
+                                  Confirmar Agendamento
+                              </Button>
+                          )}
+                      </div>
+                  )}
+              </Card>
+          </div>
+      </div>
   );
 }
