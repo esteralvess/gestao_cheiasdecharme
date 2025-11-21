@@ -2,13 +2,15 @@ import { apiRequest } from "../lib/queryClient";
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
-// 💡 CORREÇÃO: Função robusta para evitar barras duplas (//)
+// 💡 CORREÇÃO APLICADA AQUI: Função atualizada para evitar barras duplas na URL (ex: /api//token/)
 const getUrl = (path: string) => {
-    // 1. Remove barras do final da base
-    const base = API_BASE.trim().replace(/\/+$/, '');
-    // 2. Garante que o path comece com UMA barra
+    // 1. Remove barras duplas/múltiplas do final do API_BASE
+    const base = API_BASE.trim().replace(/\/+$/, ''); 
+    
+    // 2. Garante que o 'path' tenha uma barra inicial, mas remove barras múltiplas.
     const normalizedPath = path.trim().replace(/^\/+/, '/');
-    // 3. Junta
+    
+    // Combina a base sem barra final com o caminho que tem uma única barra inicial
     return `${base}${normalizedPath}`;
 };
 
@@ -36,6 +38,7 @@ export const authAPI = {
       .then((res: Response) => res.json())
       .then(data => {
         if (data.access) {
+            // Se "Lembrar-me" estiver marcado, usa localStorage. Senão, sessionStorage.
             const storage = payload.rememberMe ? localStorage : sessionStorage;
             storage.setItem('accessToken', data.access);
         }
@@ -51,6 +54,7 @@ export const authAPI = {
       .then((res: Response) => res.json())
       .then(data => {
         if (data.access) {
+            // Assume que se o refresh token existe, a sessão deve ser mantida onde estava
             const storage = localStorage.getItem('refreshToken') ? localStorage : sessionStorage;
             storage.setItem('accessToken', data.access);
         }
@@ -76,11 +80,16 @@ export const userAPI = {
 };
 
 export const adminAPI = {
+  // Usuários
   getUsers: (): Promise<any[]> => apiRequest("GET", getUrl("/users/")).then(res => res.json()),
   updateUser: (id: number, data: DataPayload): Promise<any> => apiRequest("PATCH", getUrl(`/users/${id}/`), data).then(res => res.json()),
   createUser: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/users/"), data).then(res => res.json()),
   setUserPassword: (id: number, password: string): Promise<any> => apiRequest("POST", getUrl(`/users/${id}/set-password/`), { password }).then(res => res.json()),
+
+  // Grupos
   getGroups: (): Promise<any[]> => apiRequest("GET", getUrl("/groups/")).then(res => res.json()),
+
+  // Permissões
   getPermissions: (): Promise<any[]> => apiRequest("GET", getUrl("/permissions/")).then(res => res.json()),
 };
 
@@ -126,11 +135,6 @@ export const customersAPI = {
     apiRequest("POST", getUrl(`/customers/${id}/redeem-points/`), data).then((res: Response) => res.json()),
   adjustPoints: (id: string, data: { points_to_adjust: number }): Promise<any> => 
     apiRequest("POST", getUrl(`/customers/${id}/adjust-points/`), data).then((res: Response) => res.json()),
-    
-  // 💡 Verificação de Telefone (Endpoint corrigido para evitar barra dupla)
-  checkPhone: (phone: string): Promise<any> => 
-    apiRequest("GET", getUrl(`/customers/check-phone/?phone=${encodeURIComponent(phone)}`))
-      .then((res: Response) => res.json()),
 };
 
 // --- Appointments ---
