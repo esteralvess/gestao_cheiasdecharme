@@ -33,6 +33,14 @@ interface Referral { id: string; referrer_customer: string; status: 'completed';
 
 const ALL_FILTER_VALUE = "all";
 
+// 💡 FUNÇÃO DE PARSE CORRIGIDA
+// O backend envia ISO com timezone (ex: 2025-11-22T10:00:00-03:00). 
+// O parseISO lê isso e cria um objeto Date que representa esse momento exato.
+const parseAppointmentDate = (dateString: string): Date => {
+  if (!dateString) return new Date();
+  return parseISO(dateString);
+};
+
 // --- COMPONENTE: MODAL DE EDIÇÃO/CRIAÇÃO DE AGENDAMENTO ---
 
 interface AppointmentEditModalProps {
@@ -174,8 +182,13 @@ function AppointmentEditModal({ appointment, customers, staff, services, locatio
     const [endHour, endMinute] = formData.endTime.split(':').map(Number);
     const finalStartTime = setSeconds(setMinutes(setHours(formData.date, startHour), startMinute), 0);
     const finalEndTime = setSeconds(setMinutes(setHours(formData.date, endHour), endMinute), 0);
+    
+    // 💡 ENVIO: Formata como string Local (ISO sem Z) para garantir que o backend receba o horário visual
     const payload = {
-      id: appointment.id, customer: formData.customerId, staff: formData.staffId, service: formData.serviceId, location: formData.locationId, start_time: finalStartTime.toISOString(), end_time: finalEndTime.toISOString(), status: formData.status, notes: formData.notes,
+      id: appointment.id, customer: formData.customerId, staff: formData.staffId, service: formData.serviceId, location: formData.locationId, 
+      start_time: format(finalStartTime, "yyyy-MM-dd'T'HH:mm:ss"), 
+      end_time: format(finalEndTime, "yyyy-MM-dd'T'HH:mm:ss"), 
+      status: formData.status, notes: formData.notes,
     };
     onSave({ payload });
   };
@@ -437,7 +450,10 @@ export default function Appointments() {
     return allAppointments
       .map(apt => ({
         id: apt.id, status: apt.status, customerName: apt.customer_name, serviceName: apt.service_name, staffName: apt.staff_name, locationName: apt.location_name,
-        startTime: parseISO(apt.start_time), endTime: parseISO(apt.end_time), notes: apt.notes, customerId: apt.customer, staffId: apt.staff, serviceId: apt.service, locationId: apt.location,
+        // 🔥 USO DO PARSER CORRIGIDO
+        startTime: parseAppointmentDate(apt.start_time), 
+        endTime: parseAppointmentDate(apt.end_time), 
+        notes: apt.notes, customerId: apt.customer, staffId: apt.staff, serviceId: apt.service, locationId: apt.location,
       }))
       .filter(apt => {
         const locationMatch = locationFilter ? apt.locationId === locationFilter : true;

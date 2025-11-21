@@ -2,22 +2,12 @@ import { apiRequest } from "../lib/queryClient";
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
-// 💡 CORREÇÃO APLICADA AQUI: Função atualizada para evitar barras duplas na URL (ex: /api//token/)
+// Função auxiliar para montar URLs sem erros de barra dupla
 const getUrl = (path: string) => {
-    // 1. Remove barras duplas/múltiplas do final do API_BASE
-    const base = API_BASE.trim().replace(/\/+$/, ''); 
-    
-    // 2. Garante que o 'path' tenha uma barra inicial, mas remove barras múltiplas.
+    const base = API_BASE.trim().replace(/\/+$/, '');
     const normalizedPath = path.trim().replace(/^\/+/, '/');
-    
-    // Combina a base sem barra final com o caminho que tem uma única barra inicial
     return `${base}${normalizedPath}`;
 };
-
-interface Credentials {
-  username: string;
-  password: string;
-}
 
 interface DataPayload {
   [key: string]: any;
@@ -38,7 +28,6 @@ export const authAPI = {
       .then((res: Response) => res.json())
       .then(data => {
         if (data.access) {
-            // Se "Lembrar-me" estiver marcado, usa localStorage. Senão, sessionStorage.
             const storage = payload.rememberMe ? localStorage : sessionStorage;
             storage.setItem('accessToken', data.access);
         }
@@ -54,7 +43,6 @@ export const authAPI = {
       .then((res: Response) => res.json())
       .then(data => {
         if (data.access) {
-            // Assume que se o refresh token existe, a sessão deve ser mantida onde estava
             const storage = localStorage.getItem('refreshToken') ? localStorage : sessionStorage;
             storage.setItem('accessToken', data.access);
         }
@@ -80,16 +68,11 @@ export const userAPI = {
 };
 
 export const adminAPI = {
-  // Usuários
   getUsers: (): Promise<any[]> => apiRequest("GET", getUrl("/users/")).then(res => res.json()),
   updateUser: (id: number, data: DataPayload): Promise<any> => apiRequest("PATCH", getUrl(`/users/${id}/`), data).then(res => res.json()),
   createUser: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/users/"), data).then(res => res.json()),
   setUserPassword: (id: number, password: string): Promise<any> => apiRequest("POST", getUrl(`/users/${id}/set-password/`), { password }).then(res => res.json()),
-
-  // Grupos
   getGroups: (): Promise<any[]> => apiRequest("GET", getUrl("/groups/")).then(res => res.json()),
-
-  // Permissões
   getPermissions: (): Promise<any[]> => apiRequest("GET", getUrl("/permissions/")).then(res => res.json()),
 };
 
@@ -97,7 +80,6 @@ export const adminAPI = {
 // APIs de CRUD
 // ----------------------------------------------------
 
-// --- Locations ---
 export const locationsAPI = {
   getAll: (): Promise<any> => apiRequest("GET", getUrl("/locations/")).then((res: Response) => res.json()),
   getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/locations/${id}/`)).then((res: Response) => res.json()),
@@ -106,7 +88,6 @@ export const locationsAPI = {
   delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/locations/${id}/`)),
 };
 
-// --- Staff ---
 export const staffAPI = {
   getAll: (): Promise<any> => apiRequest("GET", getUrl("/staff/")).then((res: Response) => res.json()),
   getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/staff/${id}/`)).then((res: Response) => res.json()),
@@ -115,7 +96,6 @@ export const staffAPI = {
   delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/staff/${id}/`)),
 };
 
-// --- Services ---
 export const servicesAPI = {
   getAll: (): Promise<any> => apiRequest("GET", getUrl("/services/")).then((res: Response) => res.json()),
   getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/services/${id}/`)).then((res: Response) => res.json()),
@@ -124,20 +104,25 @@ export const servicesAPI = {
   delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/services/${id}/`)),
 };
 
-// --- Customers ---
 export const customersAPI = {
   getAll: (): Promise<any> => apiRequest("GET", getUrl("/customers/")).then((res: Response) => res.json()),
   getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/customers/${id}/`)).then((res: Response) => res.json()),
   create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/customers/"), data).then((res: Response) => res.json()),
   update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PUT", getUrl(`/customers/${id}/`), data).then((res: Response) => res.json()),
   delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/customers/${id}/`)),
+  
   redeemPoints: (id: string, data: { points_to_redeem: number }): Promise<any> => 
     apiRequest("POST", getUrl(`/customers/${id}/redeem-points/`), data).then((res: Response) => res.json()),
+  
   adjustPoints: (id: string, data: { points_to_adjust: number }): Promise<any> => 
     apiRequest("POST", getUrl(`/customers/${id}/adjust-points/`), data).then((res: Response) => res.json()),
+    
+  // 💡 FUNÇÃO QUE ESTAVA FALTANDO
+  checkPhone: (phone: string): Promise<any> => 
+    apiRequest("GET", getUrl(`/customers/check-phone/?phone=${encodeURIComponent(phone)}`))
+      .then((res: Response) => res.json()),
 };
 
-// --- Appointments ---
 export const appointmentsAPI = {
   getAll: (): Promise<any> => apiRequest("GET", getUrl("/appointments/")).then((res: Response) => res.json()),
   getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/appointments/${id}/`)).then((res: Response) => res.json()),
@@ -146,7 +131,6 @@ export const appointmentsAPI = {
   delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/appointments/${id}/`)),
 };
 
-// --- Staff Shifts ---
 export const staffShiftsAPI = {
   getAll: () => apiRequest("GET", getUrl("/staff_shifts/")).then((res: Response) => res.json()),
   create: (data: DataPayload) => apiRequest("POST", getUrl("/staff_shifts/"), data).then((res: Response) => res.json()),
@@ -154,7 +138,6 @@ export const staffShiftsAPI = {
   delete: (id: string | number) => apiRequest("DELETE", getUrl(`/staff_shifts/${id}/`)).then((res: Response) => res.json()),  
 };
 
-// --- Staff Services ---
 export const staffServicesAPI = {
   getAll: (): Promise<any> => apiRequest("GET", getUrl("/staff_services/")).then((res: Response) => res.json()),
   create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/staff_services/"), data).then((res: Response) => res.json()),
@@ -168,7 +151,6 @@ export const staffServicesAPI = {
   }
 };
 
-// --- Staff Exceptions ---
 export const staffExceptionsAPI = {
   getAll: () => apiRequest("GET", getUrl("/staff_exceptions/")).then((res: Response) => res.json()),
   create: (data: DataPayload) => apiRequest("POST", getUrl("/staff_exceptions/"), data).then((res: Response) => res.json()),
@@ -176,7 +158,6 @@ export const staffExceptionsAPI = {
   delete: (id: string | number) => apiRequest("DELETE", getUrl(`/staff_exceptions/${id}/`)).then((res: Response) => res.json()),
 };
 
-// --- Staff Commissions ---
 export const staffCommissionsAPI = {
   getAll: () => apiRequest("GET", getUrl("/staff_commissions/")).then((res: Response) => res.json()),
   create: (data: DataPayload) => apiRequest("POST", getUrl("/staff_commissions/"), data).then((res: Response) => res.json()),
@@ -184,14 +165,12 @@ export const staffCommissionsAPI = {
   delete: (id: string | number) => apiRequest("DELETE", getUrl(`/staff_commissions/${id}/`)).then((res: Response) => res.json()),
 };
 
-// --- Referrals ---
 export const referralsAPI = {
   getAll: (): Promise<any> => apiRequest("GET", getUrl("/referrals/")).then((res: Response) => res.json()),
   create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/referrals/"), data).then((res: Response) => res.json()),
   applyReward: (id: string): Promise<any> => apiRequest("POST", getUrl(`/referrals/${id}/apply-reward/`)).then((res: Response) => res.json()),
 };
 
-// --- Expenses ---
 export const expensesAPI = {
   getAll: (): Promise<any> => apiRequest("GET", getUrl("/expenses/")).then((res: Response) => res.json()),
   create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/expenses/"), data).then((res: Response) => res.json()),
@@ -199,7 +178,6 @@ export const expensesAPI = {
   delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/expenses/${id}/`)),
 };
 
-// --- Reports ---
 export const reportsAPI = {
   getRevenueByStaff: (startDate: string, endDate: string): Promise<any> => 
     apiRequest("GET", getUrl(`/reports/revenue-by-staff/?start_date=${startDate}&end_date=${endDate}`))

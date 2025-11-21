@@ -10,7 +10,6 @@ from .views import (
     CurrentUserView
 )
 
-# Criação do Router e registro das rotas
 router = DefaultRouter()
 router.register(r'locations', LocationViewSet)
 router.register(r'staff', StaffViewSet, basename='staff')
@@ -28,14 +27,9 @@ router.register(r'groups', GroupViewSet, basename='groups')
 router.register(r'permissions', PermissionViewSet, basename='permissions')
 
 urlpatterns = [
-    # Rotas do Router (CRUDs)
     path('', include(router.urls)),
-    
-    # Autenticação JWT
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    
-    # Usuário Atual
     path('users/me/', CurrentUserView.as_view(), name='current_user'),
     
     # Relatórios

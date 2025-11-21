@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { format, isSameDay, addMinutes, setHours, setMinutes, isPast, getDay, startOfMonth, endOfMonth, eachDayOfInterval, endOfDay } from "date-fns"; 
+import { format, isSameDay, addMinutes, setHours, setMinutes, isPast, getDay } from "date-fns"; 
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 import { appointmentsAPI, servicesAPI, staffAPI, staffShiftsAPI, staffServicesAPI, locationsAPI, customersAPI } from "@/services/api";
@@ -22,6 +22,21 @@ interface Location { id: string; name: string; }
 interface StaffShift { staff_id: string; location_id: string; weekday: number; start_time: string; end_time: string; }
 interface StaffService { staff_id: string; service_id: string; }
 interface Appointment { id: string; staff: string; start_time: string; end_time: string; status: 'confirmed' | 'pending'; }
+
+// ----------------------------------------------------
+// 🔥 NOVA FUNÇÃO: Converte Date para string ISO SEM conversão UTC
+// ----------------------------------------------------
+const toLocalISOString = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  
+  // Retorna no formato ISO mas com o horário LOCAL (sem conversão para UTC)
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+};
 
 // ----------------------------------------------------
 // FUNÇÕES AUXILIARES DE TELEFONE
@@ -239,6 +254,7 @@ export default function AgendamentoCliente() {
   });
 
   const handleFinalize = () => {
+      // 🔥 CORREÇÃO CRÍTICA: Usar toLocalISOString em vez de toISOString
       const [h, m] = formData.time.split(':').map(Number);
       const start = setMinutes(setHours(formData.date, h), m);
       
@@ -255,7 +271,7 @@ export default function AgendamentoCliente() {
           customer_phone: fullPhone, 
           customer_email: formData.customerEmail,
           location: formData.locationId,
-          start_time: start.toISOString(),
+          start_time: toLocalISOString(start), // 🔥 AQUI ESTÁ A CORREÇÃO
           items: items
       });
   };
@@ -550,7 +566,6 @@ export default function AgendamentoCliente() {
              );
 
           case 5:
-             // 💡 MENSAGEM ATUALIZADA (PRÉ-AGENDAMENTO + SINAL)
              return (
                  <div className="flex flex-col items-center justify-center py-16 text-center animate-in fade-in zoom-in duration-500">
                      <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6">

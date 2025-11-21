@@ -1,5 +1,7 @@
 from django.contrib.auth.models import User, Group, Permission
 from rest_framework import serializers
+from django.utils import timezone
+import pytz
 from .models import (
     Location, Referral, Staff, Service, Customer, Appointment, 
     StaffCommission, StaffException, StaffService, ServiceLocation, 
@@ -100,15 +102,18 @@ class AppointmentSerializer(serializers.ModelSerializer):
         required=False,
         allow_empty=True
     )
+    
+    # 🔥 CORREÇÃO CRÍTICA: Sobrescrever os campos de datetime para forçar timezone local na saída
+    start_time = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S')
+    end_time = serializers.DateTimeField(format='%Y-%m-%dT%H:%M:%S')
 
     class Meta:
         model = Appointment
-        # Usamos uma lista explícita para garantir o campo write_only 'services'
         fields = [
             'id', 'customer', 'staff', 'service', 'location', 'start_time', 'end_time', 
             'google_calendar_event_id', 'status', 'notes', 'created_at', 'updated_at', 
             'cancelled_at', 'payment_method', 'discount_centavos', 'final_amount_centavos',
-            'customer_name', 'staff_name', 'service_name', 'location_name', 'services' # Campo write_only
+            'customer_name', 'staff_name', 'service_name', 'location_name', 'services'
         ]
         extra_kwargs = {
             'customer': {'required': False},
@@ -117,11 +122,40 @@ class AppointmentSerializer(serializers.ModelSerializer):
             'location': {'required': False},
             'start_time': {'required': False},
             'end_time': {'required': False},
-            # ✅ Torna os novos campos opcionais na API, já que só são preenchidos no final
             'payment_method': {'required': False},
             'discount_centavos': {'required': False},
             'final_amount_centavos': {'required': False},
         }
+    
+    def to_representation(self, instance):
+        """
+        🔥 CRÍTICO: Converte os datetimes para timezone local antes de serializar
+        Lida com datetimes naive (antigos) e aware (novos)
+        """
+        ret = super().to_representation(instance)
+        
+        # Converte start_time e end_time para o timezone local
+        if instance.start_time:
+            # Se o datetime for naive (sem timezone), assume São Paulo
+            if timezone.is_naive(instance.start_time):
+                sao_paulo_tz = pytz.timezone('America/Sao_Paulo')
+                aware_start = sao_paulo_tz.localize(instance.start_time)
+                local_start = timezone.localtime(aware_start)
+            else:
+                local_start = timezone.localtime(instance.start_time)
+            ret['start_time'] = local_start.strftime('%Y-%m-%dT%H:%M:%S')
+        
+        if instance.end_time:
+            # Se o datetime for naive (sem timezone), assume São Paulo
+            if timezone.is_naive(instance.end_time):
+                sao_paulo_tz = pytz.timezone('America/Sao_Paulo')
+                aware_end = sao_paulo_tz.localize(instance.end_time)
+                local_end = timezone.localtime(aware_end)
+            else:
+                local_end = timezone.localtime(instance.end_time)
+            ret['end_time'] = local_end.strftime('%Y-%m-%dT%H:%M:%S')
+        
+        return ret
 
 
 class ServiceLocationSerializer(serializers.ModelSerializer):

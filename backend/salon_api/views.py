@@ -1,4 +1,4 @@
-# salon_api/views.py
+# salon_api/views.py (VERSÃO COM DEBUG)
 from django.contrib.auth.models import User, Group, Permission
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -21,6 +21,7 @@ from datetime import datetime, date, timedelta
 from django.db import transaction 
 import requests 
 import json
+import pytz
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.filter(is_superuser=False).order_by('username')
@@ -193,11 +194,29 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 if first_location: data['location'] = first_location.id
                 else: return Response({"error": "Localização obrigatória."}, status=400)
         
+        # 🔥 DEBUG + CORREÇÃO
         try:
-            # Tempo inicial do PRIMEIRO serviço da sequência
-            current_start_time = datetime.fromisoformat(data['start_time'].replace('Z', '+00:00'))
-        except (ValueError, TypeError):
-             return Response({"error": "Start time inválido."}, status=400)
+            start_time_str = data['start_time']
+            print(f"🔍 RECEBIDO DO FRONTEND: {start_time_str}")
+            
+            # Remove o 'Z' se existir
+            if start_time_str.endswith('Z'):
+                start_time_str = start_time_str[:-1]
+                print(f"🔍 APÓS REMOVER Z: {start_time_str}")
+            
+            # Parse como datetime naive
+            naive_dt = datetime.fromisoformat(start_time_str)
+            print(f"🔍 DATETIME NAIVE (sem TZ): {naive_dt}")
+            
+            # Marca como horário de São Paulo
+            sao_paulo_tz = pytz.timezone('America/Sao_Paulo')
+            current_start_time = sao_paulo_tz.localize(naive_dt)
+            print(f"🔍 COM TIMEZONE SP: {current_start_time}")
+            print(f"🔍 ISO STRING: {current_start_time.isoformat()}")
+            
+        except (ValueError, TypeError) as e:
+             print(f"❌ ERRO NO PARSING: {e}")
+             return Response({"error": f"Start time inválido: {e}"}, status=400)
 
         created_appointments = []
         n8n_services_list = []
@@ -221,8 +240,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                  return Response({"error": f"{staff_obj.name} não realiza {service_obj.name}."}, status=400)
 
             duration = service_obj.default_duration_min or 30
-            
-            # Calcula o fim deste serviço
             appt_end_time = current_start_time + timedelta(minutes=duration)
 
             total_value_centavos += (service_obj.price_centavos or 0)
@@ -241,11 +258,16 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             appt_data['status'] = 'pending' 
             appt_data['notes'] = final_notes
             
+            print(f"🔍 SALVANDO NO BANCO: start_time={appt_data['start_time']}")
+            
             serializer = self.get_serializer(data=appt_data)
             serializer.is_valid(raise_exception=True)
-            created_appointments.append(serializer.save())
+            appointment = serializer.save()
+            created_appointments.append(appointment)
             
-            # 💡 CRÍTICO: O próximo serviço começa quando este termina
+            print(f"🔍 SALVO NO BANCO: {appointment.start_time}")
+            print(f"🔍 LOCALTIME DO SALVO: {timezone.localtime(appointment.start_time)}")
+            
             current_start_time = appt_end_time 
 
         # 5. Disparo N8N
@@ -254,18 +276,19 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 total_reais = total_value_centavos / 100
                 sinal_reais = total_reais * 0.10
                 first_appt = created_appointments[0]
+                local_start = timezone.localtime(first_appt.start_time)
                 
                 n8n_payload = {
                     "customer_name": customer.full_name,
                     "customer_phone": customer.whatsapp,
-                    "appointment_date": first_appt.start_time.strftime("%d/%m/%Y"),
-                    "appointment_time": first_appt.start_time.strftime("%H:%M"),
+                    "appointment_date": local_start.strftime("%d/%m/%Y"),
+                    "appointment_time": local_start.strftime("%H:%M"),
                     "location": first_appt.location.name,
                     "services": "\n".join(n8n_services_list),
                     "total_value": f"R$ {total_reais:.2f}".replace('.', ','),
                     "signal_value": f"R$ {sinal_reais:.2f}".replace('.', ','),
                 }
-                requests.post("https://flow.gerenc.com/webhook-test/novo-agendamento", json=n8n_payload, timeout=3)
+                requests.post("https://webhooks.gerenc.com/webhook/pre-agendamento", json=n8n_payload, timeout=3)
             except Exception as e:
                 print(f"Erro n8n: {e}")
 
@@ -325,7 +348,7 @@ class StaffServiceViewSet(viewsets.ModelViewSet):
 
 class StaffExceptionViewSet(viewsets.ModelViewSet):
     serializer_class = StaffExceptionSerializer
-    permission_classes = [permissions.AllowAny] 
+    permissions_classes = [permissions.AllowAny] 
     def get_queryset(self): return StaffException.objects.all().order_by('-start_date')
 
 class StaffCommissionViewSet(viewsets.ModelViewSet):

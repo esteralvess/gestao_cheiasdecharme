@@ -22,7 +22,6 @@ class Staff(models.Model):
     role = models.TextField(null=True, blank=True)
     active = models.BooleanField(default=True)
     default_commission_percentage = models.FloatField(default=0.0) 
-
     
     class Meta:
         managed = False
@@ -82,6 +81,7 @@ class Customer(models.Model):
     notes = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
+    # 💡 CAMPO NOVO: Identifica clientes realmente novos
     is_truly_new = models.BooleanField(default=False, null=True, blank=True)
     
     class Meta:
@@ -139,11 +139,14 @@ class Appointment(models.Model):
 
 
 class StaffService(models.Model):
+    # 💡 CORREÇÃO CRÍTICA: ID explícito para permitir múltiplos serviços
+    id = models.BigAutoField(primary_key=True)
+    
     staff = models.ForeignKey(
         Staff, 
         on_delete=models.CASCADE, 
-        db_column='staff_id',
-        primary_key=True
+        db_column='staff_id'
+        # primary_key=True removido
     )
     service = models.ForeignKey(
         Service, 
@@ -171,17 +174,9 @@ class ServiceLocation(models.Model):
 
 
 class StaffShift(models.Model):
-    """
-    Turnos de trabalho dos profissionais
-    """
     WEEKDAY_CHOICES = [
-        (1, 'Segunda-feira'),
-        (2, 'Terça-feira'),
-        (3, 'Quarta-feira'),
-        (4, 'Quinta-feira'),
-        (5, 'Sexta-feira'),
-        (6, 'Sábado'),
-        (7, 'Domingo'),
+        (1, 'Segunda-feira'), (2, 'Terça-feira'), (3, 'Quarta-feira'),
+        (4, 'Quinta-feira'), (5, 'Sexta-feira'), (6, 'Sábado'), (7, 'Domingo'),
     ]
     
     id = models.AutoField(primary_key=True)
@@ -201,20 +196,8 @@ class StaffShift(models.Model):
 
 
 class BusinessException(models.Model):
-    """
-    Folgas, férias e atestados
-    """
-    TYPE_CHOICES = [
-        ('folga', 'Folga'),
-        ('férias', 'Férias'),
-        ('atestado', 'Atestado'),
-    ]
-    
-    STATUS_CHOICES = [
-        ('aprovado', 'Aprovado'),
-        ('pendente', 'Pendente'),
-        ('rejeitado', 'Rejeitado'),
-    ]
+    TYPE_CHOICES = [('folga', 'Folga'), ('férias', 'Férias'), ('atestado', 'Atestado')]
+    STATUS_CHOICES = [('aprovado', 'Aprovado'), ('pendente', 'Pendente'), ('rejeitado', 'Rejeitado')]
     
     id = models.AutoField(primary_key=True)
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, db_column='staff_id')
@@ -236,20 +219,8 @@ class BusinessException(models.Model):
 
     
 class StaffException(models.Model):
-    """
-    Folgas, férias e atestados dos colaboradores
-    """
-    TYPE_CHOICES = [
-        ('folga', 'Folga'),
-        ('férias', 'Férias'),
-        ('atestado', 'Atestado'),
-    ]
-    
-    STATUS_CHOICES = [
-        ('aprovado', 'Aprovado'),
-        ('pendente', 'Pendente'),
-        ('rejeitado', 'Rejeitado'),
-    ]
+    TYPE_CHOICES = [('folga', 'Folga'), ('férias', 'Férias'), ('atestado', 'Atestado')]
+    STATUS_CHOICES = [('aprovado', 'Aprovado'), ('pendente', 'Pendente'), ('rejeitado', 'Rejeitado')]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, db_column='staff_id')
@@ -271,24 +242,11 @@ class StaffException(models.Model):
 
     
 class StaffCommission(models.Model):
-    """
-    Comissões dos colaboradores por serviços realizados
-    """
-    STATUS_CHOICES = [
-        ('pendente_pagamento', 'Pendente de Pagamento'),
-        ('pago', 'Pago'),
-        ('cancelado', 'Cancelado'),
-    ]
+    STATUS_CHOICES = [('pendente_pagamento', 'Pendente de Pagamento'), ('pago', 'Pago'), ('cancelado', 'Cancelado')]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, db_column='staff_id')
-    appointment = models.ForeignKey(
-        Appointment, 
-        on_delete=models.SET_NULL, 
-        null=True, 
-        blank=True,
-        db_column='appointment_id'
-    )
+    appointment = models.ForeignKey(Appointment, on_delete=models.SET_NULL, null=True, blank=True, db_column='appointment_id')
     service = models.ForeignKey(Service, on_delete=models.CASCADE, db_column='service_id')
     date = models.DateField()
     service_price_centavos = models.FloatField()
@@ -309,26 +267,11 @@ class StaffCommission(models.Model):
         return f"{self.staff.name} - {self.service.name} - R$ {self.commission_amount_centavos/100:.2f}"
     
 class Referral(models.Model):
-    STATUS_CHOICES = [
-        ('pending', 'Pendente'),
-        ('completed', 'Recompensa Liberada'),
-        ('reward_used', 'Recompensa Utilizada'),
-    ]
+    STATUS_CHOICES = [('pending', 'Pendente'), ('completed', 'Recompensa Liberada'), ('reward_used', 'Recompensa Utilizada')]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
-    referrer_customer = models.ForeignKey(
-        Customer, 
-        on_delete=models.CASCADE,
-        related_name='referrals_made'
-    )
-    
-    referred_customer = models.OneToOneField(
-        Customer,
-        on_delete=models.CASCADE,
-        related_name='referral_received'
-    )
-    
+    referrer_customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='referrals_made')
+    referred_customer = models.OneToOneField(Customer, on_delete=models.CASCADE, related_name='referral_received')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     reward_applied_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -341,19 +284,10 @@ class Referral(models.Model):
     def __str__(self):
         return f"{self.referrer_customer.full_name} indicou {self.referred_customer.full_name}"
 
-# ✅ NOVO MODELO PARA DESPESAS
 class Expense(models.Model):
-    """
-    Registra as despesas fixas e variáveis do negócio.
-    """
     CATEGORY_CHOICES = [
-        ('aluguel', 'Aluguel'),
-        ('produtos', 'Produtos/Estoque'),
-        ('salarios', 'Salários/Pró-labore'),
-        ('marketing', 'Marketing'),
-        ('contas', 'Contas (Água, Luz, Internet)'),
-        ('impostos', 'Impostos e Taxas'),
-        ('outros', 'Outros'),
+        ('aluguel', 'Aluguel'), ('produtos', 'Produtos/Estoque'), ('salarios', 'Salários/Pró-labore'),
+        ('marketing', 'Marketing'), ('contas', 'Contas (Água, Luz, Internet)'), ('impostos', 'Impostos e Taxas'), ('outros', 'Outros')
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
