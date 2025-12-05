@@ -3,7 +3,7 @@ from rest_framework import serializers
 from django.utils import timezone
 import pytz
 from .models import (
-    Location, Referral, Staff, Service, Customer, Appointment, 
+    Location, Promotion, PromotionItem, Referral, Staff, Service, Customer, Appointment, 
     StaffCommission, StaffException, StaffService, ServiceLocation, 
     StaffShift, BusinessException, Expense
 )
@@ -361,8 +361,57 @@ class ReferralSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['status', 'reward_applied_at', 'created_at']
 
-# ✅ NOVO SERIALIZER PARA DESPESAS
 class ExpenseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Expense
         fields = '__all__'
+
+class PromotionItemSerializer(serializers.ModelSerializer):
+    # Configura para aceitar ID na escrita e devolver Objeto na leitura
+    service_id = serializers.PrimaryKeyRelatedField(
+        queryset=Service.objects.all(), 
+        source='service', 
+        write_only=True
+    )
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    
+    # Devolve o ID do serviço também na leitura para o frontend preencher o Select
+    service = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = PromotionItem
+        fields = ['id', 'service_id', 'service', 'service_name', 'quantity']
+
+class PromotionSerializer(serializers.ModelSerializer):
+    # 💡 OBRIGATÓRIO: Este campo faz os itens aparecerem no JSON de resposta
+    items = PromotionItemSerializer(many=True) 
+
+    class Meta:
+        model = Promotion
+        fields = ['id', 'title', 'description', 'type', 'price_centavos', 'discount_percentage', 'image_url', 'active', 'items']
+
+    def create(self, validated_data):
+        items_data = validated_data.pop('items')
+        promotion = Promotion.objects.create(**validated_data)
+        for item in items_data:
+            PromotionItem.objects.create(promotion=promotion, **item)
+        return promotion
+
+    def update(self, instance, validated_data):
+        items_data = validated_data.pop('items', None)
+        
+        instance.title = validated_data.get('title', instance.title)
+        instance.description = validated_data.get('description', instance.description)
+        instance.type = validated_data.get('type', instance.type)
+        instance.price_centavos = validated_data.get('price_centavos', instance.price_centavos)
+        instance.discount_percentage = validated_data.get('discount_percentage', instance.discount_percentage)
+        instance.image_url = validated_data.get('image_url', instance.image_url)
+        instance.active = validated_data.get('active', instance.active)
+        instance.save()
+
+        if items_data is not None:
+            instance.items.all().delete()
+            for item in items_data:
+                PromotionItem.objects.create(promotion=instance, **item)
+
+        return instance

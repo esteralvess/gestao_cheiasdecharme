@@ -7,7 +7,7 @@ from .views import (
     StaffExceptionViewSet, StaffCommissionViewSet, ReferralViewSet, 
     ExpenseViewSet, UserViewSet, GroupViewSet, PermissionViewSet,
     RevenueByStaffReport, RevenueByLocationReport, RevenueByServiceReport,
-    CurrentUserView
+    CurrentUserView, PromotionViewSet
 )
 
 router = DefaultRouter()
@@ -25,6 +25,7 @@ router.register(r'expenses', ExpenseViewSet, basename='expenses')
 router.register(r'users', UserViewSet, basename='users')
 router.register(r'groups', GroupViewSet, basename='groups')
 router.register(r'permissions', PermissionViewSet, basename='permissions')
+router.register(r'promotions', PromotionViewSet, basename='promotions')
 
 urlpatterns = [
     path('', include(router.urls)),

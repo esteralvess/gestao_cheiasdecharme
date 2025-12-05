@@ -305,3 +305,33 @@ class Expense(models.Model):
 
     def __str__(self):
         return f"{self.description} - R$ {self.amount_centavos / 100:.2f}"
+    
+class Promotion(models.Model):
+    TYPE_CHOICES = [('combo', 'Combo'), ('package', 'Pacote')]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    title = models.TextField()
+    description = models.TextField(null=True, blank=True)
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES)
+    price_centavos = models.IntegerField()
+    discount_percentage = models.IntegerField(null=True, blank=True)
+    image_url = models.TextField(null=True, blank=True)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        managed = False
+        db_table = 'promotions'
+
+    def __str__(self):
+        return self.title
+
+class PromotionItem(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    promotion = models.ForeignKey(Promotion, on_delete=models.CASCADE, related_name='items', db_column='promotion_id')
+    service = models.ForeignKey(Service, on_delete=models.CASCADE, db_column='service_id')
+    quantity = models.IntegerField(default=1)
+
+    class Meta:
+        managed = False
+        db_table = 'promotion_items'

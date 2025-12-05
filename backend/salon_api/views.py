@@ -1,27 +1,29 @@
-# salon_api/views.py (VERSÃO COM DEBUG)
 from django.contrib.auth.models import User, Group, Permission
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import (
-    Location, Staff, Service, Customer, Appointment, StaffCommission, 
+    Location, Promotion, Staff, Service, Customer, Appointment, StaffCommission, 
     StaffShift, StaffService, StaffException, BusinessException, Referral,
     Expense
 )
 from .serializers import (
-    GroupSerializer, LocationSerializer, PermissionSerializer, StaffCommissionSerializer, StaffSerializer, ServiceSerializer,
+    GroupSerializer, LocationSerializer, PermissionSerializer, PromotionSerializer, StaffCommissionSerializer, StaffSerializer, ServiceSerializer,
     CustomerSerializer, AppointmentSerializer, StaffShiftSerializer, 
     StaffServiceSerializer, StaffExceptionSerializer, BusinessExceptionSerializer, ReferralSerializer,
     ExpenseSerializer, UserSerializer
 )
 from django.db.models import Count, Q, F, Sum
 from django.utils import timezone
+# from django.utils.dateparse import parse_datetime # Não é mais necessário se o serializer validar
 from rest_framework.views import APIView
 from datetime import datetime, date, timedelta 
 from django.db import transaction 
 import requests 
 import json
 import pytz
+
+# --- VIEWSETS DE ADMINISTRAÇÃO ---
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.filter(is_superuser=False).order_by('username')
@@ -63,17 +65,19 @@ class CurrentUserView(APIView):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+# --- VIEWSETS PÚBLICAS ---
+
 class LocationViewSet(viewsets.ModelViewSet):
     queryset = Location.objects.all()
     serializer_class = LocationSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = [] 
+    authentication_classes = []
 
 class StaffViewSet(viewsets.ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = [] 
+    authentication_classes = []
     
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -94,12 +98,12 @@ class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = [] 
+    authentication_classes = []
 
 class CustomerViewSet(viewsets.ModelViewSet):
     serializer_class = CustomerSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = [] 
+    authentication_classes = []
 
     def get_queryset(self):
         return Customer.objects.annotate(
@@ -148,13 +152,13 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     queryset = Appointment.objects.all()
     serializer_class = AppointmentSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = [] 
+    authentication_classes = []
 
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         data = request.data.copy()
         
-        # 1. Customer
+        # 1. Cliente
         customer_id = data.get('customer')
         customer_name = data.pop('customer_name', None)
         customer_phone = data.pop('customer_phone', None)
@@ -174,59 +178,46 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             data['customer'] = customer.id 
         
         if not data.get('customer'):
-            return Response({"error": "Dados do cliente obrigatórios."}, status=400)
+            return Response({"error": "Dados do cliente obrigatórios."}, status=status.HTTP_400_BAD_REQUEST)
         
-        # 2. Preparação dos Itens
+        # 2. Itens
         items = data.pop('items', [])
         if not items and data.get('service') and data.get('staff'):
             items = [{'service': data.get('service'), 'staff': data.get('staff')}]
+        
         if not items:
-             return Response({"error": "Nenhum serviço selecionado."}, status=400)
+             return Response({"error": "Nenhum serviço selecionado."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 3. Validação de Location
+        # 3. Location
         if not data.get('location'):
             staff_id = items[0].get('staff')
             if staff_id:
                 staff_shift = StaffShift.objects.filter(staff_id=staff_id).first()
-                if staff_shift: data['location'] = staff_shift.location_id
+                if staff_shift:
+                    data['location'] = staff_shift.location_id
             if not data.get('location'):
                 first_location = Location.objects.all().first()
-                if first_location: data['location'] = first_location.id
-                else: return Response({"error": "Localização obrigatória."}, status=400)
+                if first_location:
+                    data['location'] = first_location.id
+                else:
+                    return Response({"error": "Localização obrigatória."}, status=status.HTTP_400_BAD_REQUEST)
         
-        # 🔥 DEBUG + CORREÇÃO
+        # 💡 PARSE SIMPLES: Converte a string ISO recebida para objeto datetime
+        # O serializer (modificado no passo anterior) já garantiu que o formato está correto
         try:
-            start_time_str = data['start_time']
-            print(f"🔍 RECEBIDO DO FRONTEND: {start_time_str}")
-            
-            # Remove o 'Z' se existir
-            if start_time_str.endswith('Z'):
-                start_time_str = start_time_str[:-1]
-                print(f"🔍 APÓS REMOVER Z: {start_time_str}")
-            
-            # Parse como datetime naive
-            naive_dt = datetime.fromisoformat(start_time_str)
-            print(f"🔍 DATETIME NAIVE (sem TZ): {naive_dt}")
-            
-            # Marca como horário de São Paulo
-            sao_paulo_tz = pytz.timezone('America/Sao_Paulo')
-            current_start_time = sao_paulo_tz.localize(naive_dt)
-            print(f"🔍 COM TIMEZONE SP: {current_start_time}")
-            print(f"🔍 ISO STRING: {current_start_time.isoformat()}")
-            
-        except (ValueError, TypeError) as e:
-             print(f"❌ ERRO NO PARSING: {e}")
-             return Response({"error": f"Start time inválido: {e}"}, status=400)
+            raw_start = data['start_time'] 
+            # Parseia como "naive" (sem timezone) se vier sem Z, ou "aware" se vier com Z
+            current_start_time = datetime.fromisoformat(raw_start.replace('Z', ''))
+        except (ValueError, TypeError):
+             return Response({"error": "Data inválida"}, status=400)
 
         created_appointments = []
         n8n_services_list = []
         total_value_centavos = 0
         
-        data.pop('service', None)
-        data.pop('staff', None)
-        data.pop('end_time', None)
+        data.pop('service', None); data.pop('staff', None); data.pop('end_time', None)
 
-        # 4. Loop SEQUENCIAL
+        # 4. Loop Sequencial
         for i, item in enumerate(items):
             service_id = item.get('service')
             staff_id = item.get('staff')
@@ -240,12 +231,14 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                  return Response({"error": f"{staff_obj.name} não realiza {service_obj.name}."}, status=400)
 
             duration = service_obj.default_duration_min or 30
+            
+            # Calcula o término
             appt_end_time = current_start_time + timedelta(minutes=duration)
 
             total_value_centavos += (service_obj.price_centavos or 0)
             n8n_services_list.append(f"{i+1}. {service_obj.name} com {staff_obj.name}")
 
-            now = timezone.localtime(timezone.now())
+            now = datetime.now()
             auto_note = f"Pré-agendamento via Site em {now.strftime('%d/%m/%Y às %H:%M')}."
             existing_notes = data.get('notes', '')
             final_notes = f"{existing_notes}\n{auto_note}" if existing_notes else auto_note
@@ -253,31 +246,35 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             appt_data = data.copy()
             appt_data['service'] = service_id
             appt_data['staff'] = staff_id
+            
+            # Envia como string ISO para o serializer salvar
             appt_data['start_time'] = current_start_time.isoformat()
             appt_data['end_time'] = appt_end_time.isoformat()
             appt_data['status'] = 'pending' 
             appt_data['notes'] = final_notes
             
-            print(f"🔍 SALVANDO NO BANCO: start_time={appt_data['start_time']}")
-            
             serializer = self.get_serializer(data=appt_data)
             serializer.is_valid(raise_exception=True)
-            appointment = serializer.save()
-            created_appointments.append(appointment)
             
-            print(f"🔍 SALVO NO BANCO: {appointment.start_time}")
-            print(f"🔍 LOCALTIME DO SALVO: {timezone.localtime(appointment.start_time)}")
+            appt = serializer.save()
+            created_appointments.append(appt)
             
             current_start_time = appt_end_time 
 
-        # 5. Disparo N8N
+        # 5. N8N
         if created_appointments:
             try:
                 total_reais = total_value_centavos / 100
                 sinal_reais = total_reais * 0.10
-                first_appt = created_appointments[0]
-                local_start = timezone.localtime(first_appt.start_time)
                 
+                first_appt = created_appointments[0]
+                
+                # Se o objeto salvo tiver timezone, converte para SP antes de mandar msg
+                # Se for naive, assume que já é o horário certo
+                local_start = first_appt.start_time
+                if timezone.is_aware(local_start):
+                     local_start = local_start.astimezone(pytz.timezone('America/Sao_Paulo'))
+
                 n8n_payload = {
                     "customer_name": customer.full_name,
                     "customer_phone": customer.whatsapp,
@@ -299,28 +296,31 @@ class AppointmentViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
         was_completed = instance.status == 'completed'
+        
         response = super().update(request, *args, **kwargs)
+
         if response.status_code == 200 and request.data.get('status') == 'completed' and not was_completed:
             instance.refresh_from_db()
+            
             if instance.service.price_centavos > 0:
                 instance.customer.points += int(instance.final_amount_centavos / 100)
                 instance.customer.save()
-            
+
             if instance.staff and instance.final_amount_centavos:
-                 commission_pct = instance.staff.default_commission_percentage or 0
-                 commission_val = (instance.final_amount_centavos * commission_pct) / 100
-                 StaffCommission.objects.update_or_create(
+                pct = instance.staff.default_commission_percentage or 0
+                val = (instance.final_amount_centavos * pct) / 100
+                StaffCommission.objects.update_or_create(
                     appointment=instance,
                     defaults={
                         'staff': instance.staff,
                         'service': instance.service,
                         'date': instance.start_time.date(),
                         'service_price_centavos': instance.service.price_centavos,
-                        'commission_percentage': commission_pct,
-                        'commission_amount_centavos': commission_val,
+                        'commission_percentage': pct,
+                        'commission_amount_centavos': val,
                         'status': 'pendente_pagamento',
                     }
-                 )
+                )
         return response
 
 class StaffShiftViewSet(viewsets.ModelViewSet):
@@ -329,8 +329,8 @@ class StaffShiftViewSet(viewsets.ModelViewSet):
     authentication_classes = [] 
     def get_queryset(self):
         queryset = StaffShift.objects.select_related('staff', 'location').all()
-        staff_id = self.request.query_params.get('staff_id', None)
-        if staff_id: queryset = queryset.filter(staff_id=staff_id)
+        if self.request.query_params.get('staff_id'):
+            queryset = queryset.filter(staff_id=self.request.query_params.get('staff_id'))
         return queryset
 
 class StaffServiceViewSet(viewsets.ModelViewSet):
@@ -348,18 +348,23 @@ class StaffServiceViewSet(viewsets.ModelViewSet):
 
 class StaffExceptionViewSet(viewsets.ModelViewSet):
     serializer_class = StaffExceptionSerializer
-    permissions_classes = [permissions.AllowAny] 
+    permission_classes = [permissions.AllowAny]
     def get_queryset(self): return StaffException.objects.all().order_by('-start_date')
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
 class StaffCommissionViewSet(viewsets.ModelViewSet):
     queryset = StaffCommission.objects.all()
     serializer_class = StaffCommissionSerializer
-    permission_classes = [permissions.AllowAny] 
+    permission_classes = [permissions.AllowAny]
+    def get_queryset(self):
+        return StaffCommission.objects.select_related('staff', 'service', 'appointment').all().order_by('-date')
 
 class ReferralViewSet(viewsets.ModelViewSet):
     queryset = Referral.objects.all()
     serializer_class = ReferralSerializer
-    permission_classes = [permissions.AllowAny] 
+    permission_classes = [permissions.AllowAny]
     @action(detail=True, methods=['post'], url_path='apply-reward')
     def apply_reward(self, request, pk=None):
         try:
@@ -372,16 +377,24 @@ class ReferralViewSet(viewsets.ModelViewSet):
 class ExpenseViewSet(viewsets.ModelViewSet):
     queryset = Expense.objects.all()
     serializer_class = ExpenseSerializer
-    permission_classes = [permissions.AllowAny] 
+    permission_classes = [permissions.AllowAny]
 
 class RevenueByStaffReport(APIView):
-    permission_classes = [permissions.IsAuthenticated] 
-    def get(self, request): return Response([]) 
-
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request, *args, **kwargs): return Response([]) 
 class RevenueByLocationReport(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    def get(self, request): return Response([]) 
-
+    def get(self, request, *args, **kwargs): return Response([]) 
 class RevenueByServiceReport(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    def get(self, request): return Response([])
+    def get(self, request, *args, **kwargs): return Response([])
+
+class PromotionViewSet(viewsets.ModelViewSet):
+    queryset = Promotion.objects.all()
+    serializer_class = PromotionSerializer
+    permission_classes = [permissions.AllowAny] # Público para o site ver
+    authentication_classes = []
+
+    def get_queryset(self):
+        # Filtra apenas as ativas por padrão
+        return Promotion.objects.filter(active=True).order_by('title')

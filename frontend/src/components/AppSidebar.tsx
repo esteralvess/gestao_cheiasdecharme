@@ -8,7 +8,8 @@ import {
   DollarSign, 
   BarChart3, 
   UserCircle, 
-  ShieldCheck 
+  ShieldCheck, 
+  Percent
 } from "lucide-react";
 import {
   Sidebar,
@@ -29,6 +30,7 @@ const menuItems = [
   { title: "Clientes", url: "/customers", icon: Users },
   { title: "Profissionais", url: "/staff", icon: UserCog },
   { title: "Serviços", url: "/services", icon: Scissors },
+  { title: "Promoções", url: "/promotions", icon: Percent },
   { title: "Unidades", url: "/locations", icon: MapPin },
   { title: "Financeiro", url: "/payments", icon: DollarSign },
   { title: "Relatórios", url: "/reports", icon: BarChart3 },

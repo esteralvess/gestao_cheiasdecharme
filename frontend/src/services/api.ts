@@ -191,3 +191,10 @@ export const reportsAPI = {
     apiRequest("GET", getUrl(`/reports/revenue-by-service/?start_date=${startDate}&end_date=${endDate}`))
       .then((res: Response) => res.json()),
 };
+
+export const promotionsAPI = {
+  getAll: (): Promise<any> => apiRequest("GET", getUrl("/promotions/")).then((res: Response) => res.json()),
+  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/promotions/"), data).then((res: Response) => res.json()),
+  update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PUT", getUrl(`/promotions/${id}/`), data).then((res: Response) => res.json()),
+  delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/promotions/${id}/`)),
+};
