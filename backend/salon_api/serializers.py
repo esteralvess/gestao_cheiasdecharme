@@ -383,12 +383,16 @@ class PromotionItemSerializer(serializers.ModelSerializer):
         fields = ['id', 'service_id', 'service', 'service_name', 'quantity']
 
 class PromotionSerializer(serializers.ModelSerializer):
-    # 💡 OBRIGATÓRIO: Este campo faz os itens aparecerem no JSON de resposta
     items = PromotionItemSerializer(many=True) 
 
     class Meta:
         model = Promotion
-        fields = ['id', 'title', 'description', 'type', 'price_centavos', 'discount_percentage', 'image_url', 'active', 'items']
+        # 💡 Adicionei os novos campos na lista
+        fields = [
+            'id', 'title', 'description', 'type', 'price_centavos', 
+            'discount_percentage', 'image_url', 'active', 'items',
+            'days_to_expire', 'min_interval_days', 'suggested_interval_days'
+        ]
 
     def create(self, validated_data):
         items_data = validated_data.pop('items')
@@ -400,6 +404,7 @@ class PromotionSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         items_data = validated_data.pop('items', None)
         
+        # Atualiza campos básicos e as novas regras
         instance.title = validated_data.get('title', instance.title)
         instance.description = validated_data.get('description', instance.description)
         instance.type = validated_data.get('type', instance.type)
@@ -407,6 +412,12 @@ class PromotionSerializer(serializers.ModelSerializer):
         instance.discount_percentage = validated_data.get('discount_percentage', instance.discount_percentage)
         instance.image_url = validated_data.get('image_url', instance.image_url)
         instance.active = validated_data.get('active', instance.active)
+        
+        # Novos campos
+        instance.days_to_expire = validated_data.get('days_to_expire', instance.days_to_expire)
+        instance.min_interval_days = validated_data.get('min_interval_days', instance.min_interval_days)
+        instance.suggested_interval_days = validated_data.get('suggested_interval_days', instance.suggested_interval_days)
+        
         instance.save()
 
         if items_data is not None:

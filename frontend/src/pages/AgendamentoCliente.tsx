@@ -1,31 +1,45 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { format, isSameDay, addMinutes, setHours, setMinutes, isPast, getDay } from "date-fns"; 
+import { format, isSameDay, addMinutes, setHours, setMinutes, isPast, getDay, parseISO, addDays, startOfDay } from "date-fns"; 
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
-import { appointmentsAPI, servicesAPI, staffAPI, staffShiftsAPI, staffServicesAPI, locationsAPI, customersAPI } from "@/services/api";
+import { appointmentsAPI, servicesAPI, staffAPI, staffShiftsAPI, staffServicesAPI, locationsAPI, customersAPI, promotionsAPI } from "@/services/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea"; // ✅ Novo Import
+import { Checkbox } from "@/components/ui/checkbox"; // ✅ Novo Import
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { Loader2, Check, Scissors, User, Clock, MapPin, CalendarCheck, Sparkles, ArrowRight } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Loader2, Check, Scissors, User, Clock, MapPin, CalendarCheck, Sparkles, ArrowRight, Tag, Package, CalendarDays, ArrowLeft } from "lucide-react";
 
-// --- INTERFACES E TIPOS ---
-interface Service { id: string; name: string; price_centavos: number; default_duration_min: number; }
+// --- INTERFACES ---
+interface Service { id: string; name: string; price_centavos: number; default_duration_min: number; category: string; }
 interface Staff { id: string; name: string; }
 interface Location { id: string; name: string; }
 interface StaffShift { staff_id: string; location_id: string; weekday: number; start_time: string; end_time: string; }
 interface StaffService { staff_id: string; service_id: string; }
-interface Appointment { id: string; staff: string; start_time: string; end_time: string; status: 'confirmed' | 'pending'; }
+interface Appointment { id: string; staff: string; start_time: string; end_time: string; status: string; }
+interface Promotion { 
+    id: string; title: string; type: 'combo' | 'package'; price_centavos: number; 
+    items: {service: string; service_id?: string; quantity: number}[]; 
+    description?: string; 
+    min_interval_days?: number; suggested_interval_days?: number; days_to_expire?: number;
+}
 
-// ----------------------------------------------------
-// 🔥 NOVA FUNÇÃO: Converte Date para string ISO SEM conversão UTC
-// ----------------------------------------------------
+// --- HELPERS ---
+const cleanPhone = (phone: string) => phone.replace(/\D/g, "");
+const formatPhoneDisplay = (value: string) => {
+    const nums = cleanPhone(value);
+    if (nums.length <= 2) return nums;
+    if (nums.length <= 7) return `(${nums.slice(0, 2)}) ${nums.slice(2)}`;
+    return `(${nums.slice(0, 2)}) ${nums.slice(2, 7)}-${nums.slice(7, 11)}`;
+};
+
 const toLocalISOString = (date: Date): string => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -33,621 +47,449 @@ const toLocalISOString = (date: Date): string => {
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
   const seconds = String(date.getSeconds()).padStart(2, '0');
-  
-  // Retorna no formato ISO mas com o horário LOCAL (sem conversão para UTC)
   return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
 };
-
-// ----------------------------------------------------
-// FUNÇÕES AUXILIARES DE TELEFONE
-// ----------------------------------------------------
-const formatPhoneNumber = (value: string) => {
-    const numbers = value.replace(/\D/g, "");
-    let coreNumber = numbers;
-    if (numbers.startsWith("55") && numbers.length > 11) {
-        coreNumber = numbers.substring(2);
-    }
-    coreNumber = coreNumber.slice(0, 11);
-    if (coreNumber.length === 0) return "";
-    let formatted = "+55";
-    if (coreNumber.length > 0) formatted += ` (${coreNumber.substring(0, 2)}`;
-    if (coreNumber.length > 2) formatted += `) ${coreNumber.substring(2, 7)}`;
-    if (coreNumber.length > 7) formatted += `-${coreNumber.substring(7, 11)}`;
-    return formatted;
-};
-
-const getRawPhone = (formatted: string) => {
-    const nums = formatted.replace(/\D/g, "");
-    if (nums.startsWith("55")) return nums;
-    return `55${nums}`;
-};
-
-// ----------------------------------------------------
-// COMPONENTE PRINCIPAL
-// ----------------------------------------------------
 
 export default function AgendamentoCliente() {
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
-  const [isCheckingPhone, setIsCheckingPhone] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>("Todos");
   
+  // Controle do Loop de Pacotes
+  const [currentSessionIndex, setCurrentSessionIndex] = useState(0);
+  const [packageSessions, setPackageSessions] = useState<any[]>([]); 
+
+  // Novos Estados
+  const [isCheckingPhone, setIsCheckingPhone] = useState(false);
+  const [consentGiven, setConsentGiven] = useState(false); // ✅ Controle do Checkbox
+  const [userNotes, setUserNotes] = useState(""); // ✅ Observações do Cliente
+
   const [formData, setFormData] = useState({
-    selectedServiceIds: [] as string[], 
-    serviceStaffMapping: {} as Record<string, string>, 
+    selectedId: '', 
+    type: 'service' as 'service' | 'combo' | 'package',
+    items: [] as {service_id: string, quantity: number}[],
+    
+    currentDate: undefined as Date | undefined,
+    currentTime: '',
+    currentStaffId: '',
+    
     locationId: '', 
-    date: new Date(), 
-    time: '',
     customerName: '', 
     customerPhone: '', 
     customerEmail: ''
   });
 
-  // Queries
+  // Queries (Data Fetching)
   const { data: services = [] } = useQuery<Service[]>({ queryKey: ['services'], queryFn: servicesAPI.getAll });
+  const { data: promotions = [] } = useQuery<Promotion[]>({ queryKey: ['promotions'], queryFn: promotionsAPI.getAll });
   const { data: allStaff = [] } = useQuery<Staff[]>({ queryKey: ['staff'], queryFn: staffAPI.getAll });
   const { data: staffServices = [] } = useQuery<StaffService[]>({ queryKey: ['staffServices'], queryFn: staffServicesAPI.getAll });
   const { data: staffShifts = [] } = useQuery<StaffShift[]>({ queryKey: ['staffShifts'], queryFn: staffShiftsAPI.getAll });
   const { data: allAppointments = [] } = useQuery<Appointment[]>({ queryKey: ['appointments'], queryFn: appointmentsAPI.getAll }); 
   const { data: locations = [] } = useQuery<Location[]>({ queryKey: ['locations'], queryFn: locationsAPI.getAll });
 
-  // Computados
-  const selectedServices = useMemo(() => 
-    services.filter(s => formData.selectedServiceIds.includes(s.id)), 
-    [formData.selectedServiceIds, services]
-  );
-  
-  const orderedServices = useMemo(() => {
-      return formData.selectedServiceIds.map(id => services.find(s => s.id === id)!).filter(Boolean);
-  }, [formData.selectedServiceIds, services]);
+  // Derivados
+  const categories = useMemo(() => {
+      const allCats = services.map(s => s.category).filter(Boolean);
+      return ["Todos", ...Array.from(new Set(allCats)).sort()];
+  }, [services]);
 
-  const totalDuration = useMemo(() => 
-    selectedServices.reduce((sum, s) => sum + (s.default_duration_min || 0), 0), 
-    [selectedServices]
-  );
-  
-  const totalPrice = useMemo(() => 
-    selectedServices.reduce((sum, s) => sum + (s.price_centavos || 0), 0), 
-    [selectedServices]
-  );
+  const orderedServices = useMemo(() => {
+      return formData.items.flatMap(item => {
+          const srv = services.find(s => s.id === item.service_id);
+          return srv ? Array(item.quantity).fill(srv) : [];
+      });
+  }, [formData.items, services]);
+
+  const currentServiceToSchedule = orderedServices[currentSessionIndex];
+  const selectedPromo = promotions.find(p => p.id === formData.selectedId);
+
+  const totalPrice = useMemo(() => {
+      if (formData.type !== 'service' && selectedPromo) return selectedPromo.price_centavos;
+      return orderedServices.reduce((sum, s) => sum + (s.price_centavos || 0), 0);
+  }, [formData, orderedServices, selectedPromo]);
+
   const formattedPrice = (totalPrice / 100).toFixed(2).replace('.', ',');
   const selectedLocation = useMemo(() => locations.find(l => l.id === formData.locationId), [formData.locationId, locations]);
 
-  // Handlers
-  const handleServiceToggle = (serviceId: string) => {
-    setFormData(f => {
-        const currentIds = f.selectedServiceIds;
-        const isSelected = currentIds.includes(serviceId);
-        const newIds = isSelected ? currentIds.filter(id => id !== serviceId) : [...currentIds, serviceId];
-        
-        const newMapping = { ...f.serviceStaffMapping };
-        if (isSelected) delete newMapping[serviceId];
-
-        return { ...f, selectedServiceIds: newIds, serviceStaffMapping: newMapping, time: '' };
-    });
+  // --- HANDLERS ---
+  const handleSelectService = (service: Service) => {
+      setFormData(f => ({ ...f, selectedId: service.id, type: 'service', items: [{ service_id: service.id, quantity: 1 }], currentDate: undefined, currentTime: '', currentStaffId: '' }));
+      setCurrentSessionIndex(0); setPackageSessions([]);
   };
 
-  const handleStaffSelect = (serviceId: string, staffId: string) => {
-      setFormData(f => ({
-          ...f,
-          serviceStaffMapping: { ...f.serviceStaffMapping, [serviceId]: staffId },
-          time: ''
+  const handleSelectPromotion = (promo: Promotion) => {
+      const mappedItems = promo.items.map(item => ({
+          service_id: item.service || item.service_id || '', 
+          quantity: item.quantity
       }));
+      setFormData(f => ({ ...f, selectedId: promo.id, type: promo.type, items: mappedItems, currentDate: undefined, currentTime: '', currentStaffId: '' }));
+      setCurrentSessionIndex(0); setPackageSessions([]);
   };
 
   const getStaffForService = (serviceId: string) => {
       if (!formData.locationId) return [];
-      const staffWhoDoService = staffServices.filter(ss => ss.service_id === serviceId).map(ss => ss.staff_id);
-      const staffAtLocation = new Set(staffShifts.filter(s => s.location_id === formData.locationId).map(s => s.staff_id));
-      return allStaff.filter(s => staffWhoDoService.includes(s.id) && staffAtLocation.has(s.id));
+      const staffIds = new Set(staffServices.filter(ss => ss.service_id === serviceId).map(ss => ss.staff_id));
+      const locationStaffIds = new Set(staffShifts.filter(s => s.location_id === formData.locationId).map(s => s.staff_id));
+      return allStaff.filter(s => staffIds.has(s.id) && locationStaffIds.has(s.id));
   };
 
-  // LÓGICA DE DISPONIBILIDADE SEQUENCIAL (CASCATA)
+  // --- CALENDÁRIO ---
+  const minDate = useMemo(() => {
+      if (currentSessionIndex === 0) return new Date();
+      if (formData.type === 'package' && selectedPromo?.min_interval_days && packageSessions.length > 0) {
+          const lastSessionDate = packageSessions[packageSessions.length - 1].date;
+          return addDays(lastSessionDate, selectedPromo.min_interval_days);
+      }
+      return new Date();
+  }, [currentSessionIndex, packageSessions, formData.type, selectedPromo]);
+
+  const isDateDisabled = (date: Date) => {
+      if (isPast(date) && !isSameDay(date, new Date())) return true;
+      if (startOfDay(date) < startOfDay(minDate)) return true;
+      if (formData.currentStaffId) {
+          const jsDay = getDay(date);
+          const dbDay = jsDay === 0 ? 7 : jsDay; 
+          const hasShift = staffShifts.some(s => s.staff_id === formData.currentStaffId && s.location_id === formData.locationId && s.weekday === dbDay);
+          if (!hasShift) return true;
+      }
+      return false;
+  };
+
+  // --- HORÁRIOS ---
   const availableSlots = useMemo(() => {
-      if (orderedServices.length === 0 || !formData.date || !formData.locationId) return [];
-      if (Object.keys(formData.serviceStaffMapping).length < orderedServices.length) return [];
+      if (!formData.currentDate || !formData.currentStaffId || !currentServiceToSchedule) return [];
+      const jsDay = getDay(formData.currentDate);
+      const dbDay = jsDay === 0 ? 7 : jsDay;
+      const shifts = staffShifts.filter(s => s.staff_id === formData.currentStaffId && s.weekday === dbDay && s.location_id === formData.locationId);
+      const validSlots = new Set<string>();
 
-      const dayOfWeek = getDay(formData.date);
-      
-      const firstService = orderedServices[0];
-      const firstStaffId = formData.serviceStaffMapping[firstService.id];
-      const firstStaffShifts = staffShifts.filter(s => s.staff_id === firstStaffId && s.weekday === dayOfWeek && s.location_id === formData.locationId);
-      
-      const validStartTimes = new Set<string>();
-
-      firstStaffShifts.forEach(shift => {
+      shifts.forEach(shift => {
           const [sh, sm] = shift.start_time.split(':').map(Number);
           const [eh, em] = shift.end_time.split(':').map(Number);
-          let current = setMinutes(setHours(formData.date, sh), sm);
-          const shiftEnd = setMinutes(setHours(formData.date, eh), em);
+          let current = setMinutes(setHours(formData.currentDate!, sh), sm);
+          const shiftEnd = setMinutes(setHours(formData.currentDate!, eh), em);
 
-          const now = new Date();
-          if (isSameDay(current, now) && current < now) {
-             const minutesNow = now.getHours() * 60 + now.getMinutes();
-             const blocks = Math.ceil((minutesNow - (sh * 60 + sm)) / 30);
-             current = addMinutes(current, blocks * 30);
+          if (isSameDay(current, new Date()) && current < new Date()) {
+             const now = new Date();
+             const blocks = Math.ceil((now.getHours()*60 + now.getMinutes() - (sh*60+sm))/30);
+             current = addMinutes(current, blocks*30);
           }
 
           while (current < shiftEnd) {
-              let isValidChain = true;
-              let chainPointer = current;
+              const srvDur = currentServiceToSchedule.default_duration_min || 30;
+              const slotEnd = addMinutes(current, srvDur);
+              const conflict = allAppointments.some(a => {
+                  if (a.status === 'cancelled' || a.staff !== formData.currentStaffId) return false;
+                  const as = parseISO(a.start_time);
+                  const ae = parseISO(a.end_time);
+                  return (current >= as && current < ae) || (slotEnd > as && slotEnd <= ae);
+              });
+              const sessionConflict = packageSessions.some(s => {
+                  if (s.staffId !== formData.currentStaffId) return false;
+                  return isSameDay(s.date, formData.currentDate!); 
+              });
 
-              for (const srv of orderedServices) {
-                  const srvStaffId = formData.serviceStaffMapping[srv.id];
-                  const srvDur = srv.default_duration_min || 30;
-                  const srvEnd = addMinutes(chainPointer, srvDur);
-
-                  const staffHasShift = staffShifts.some(s => 
-                      s.staff_id === srvStaffId && 
-                      s.weekday === dayOfWeek && 
-                      s.location_id === formData.locationId &&
-                      s.start_time <= format(chainPointer, 'HH:mm:ss') &&
-                      s.end_time >= format(srvEnd, 'HH:mm:ss')
-                  );
-
-                  if (!staffHasShift) { isValidChain = false; break; }
-
-                  const conflict = allAppointments.some(a => 
-                      a.staff === srvStaffId && 
-                      isSameDay(new Date(a.start_time), formData.date) &&
-                      (
-                          (chainPointer >= new Date(a.start_time) && chainPointer < new Date(a.end_time)) ||
-                          (srvEnd > new Date(a.start_time) && srvEnd <= new Date(a.end_time)) ||
-                          (chainPointer <= new Date(a.start_time) && srvEnd >= new Date(a.end_time))
-                      )
-                  );
-
-                  if (conflict) { isValidChain = false; break; }
-
-                  chainPointer = srvEnd;
-              }
-
-              if (isValidChain) {
-                  validStartTimes.add(format(current, 'HH:mm'));
-              }
+              if (!conflict && !sessionConflict && slotEnd <= shiftEnd) validSlots.add(format(current, 'HH:mm'));
               current = addMinutes(current, 30);
           }
       });
-      
-      return Array.from(validStartTimes).sort();
-  }, [formData, staffShifts, allAppointments, orderedServices]);
+      return Array.from(validSlots).sort();
+  }, [formData.currentDate, formData.currentStaffId, staffShifts, allAppointments, currentServiceToSchedule, packageSessions, formData.locationId]);
 
-  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      let val = e.target.value.replace(/\D/g, "");
-      if (val.length > 11) val = val.slice(0, 11);
-      let formatted = val;
-      if (val.length > 2) formatted = `(${val.slice(0,2)}) ${val.slice(2)}`;
-      if (val.length > 7) formatted = `(${val.slice(0,2)}) ${val.slice(2,7)}-${val.slice(7)}`;
-      setFormData(f => ({...f, customerPhone: formatted}));
-  };
-
+  // --- ACTIONS ---
+  
+  // 💡 LÓGICA DE BUSCA DE CLIENTE AJUSTADA
   const handlePhoneBlur = async () => {
-      const raw = getRawPhone(formData.customerPhone);
-      if (raw.length < 12) return; 
+      const raw = cleanPhone(formData.customerPhone);
+      if (raw.length < 10) return; // Mínimo para um telefone válido
+      
       setIsCheckingPhone(true);
       try {
-          const response = await customersAPI.checkPhone(raw);
-          if (response.exists) {
-              setFormData(f => ({
-                  ...f,
-                  customerName: response.name,
-                  customerEmail: response.email || f.customerEmail
-              }));
-              toast.info(`Bem-vinda de volta, ${response.name.split(' ')[0]}!`);
+          // Tenta buscar com '55' na frente, pois é o padrão do banco
+          const searchPhone = raw.startsWith('55') ? raw : `55${raw}`;
+          const res = await customersAPI.checkPhone(searchPhone);
+          
+          if (res.exists) {
+              setFormData(f => ({...f, customerName: res.name, customerEmail: res.email || f.customerEmail}));
+              toast.success(`Olá, ${res.name.split(' ')[0]}! Seus dados foram carregados.`);
           }
-      } catch (error) {
-          console.error("Erro ao verificar telefone", error);
-      } finally {
-          setIsCheckingPhone(false);
+      } catch (e) { 
+          // Silencioso se não encontrar (é um novo cliente)
+      } finally { 
+          setIsCheckingPhone(false); 
+      }
+  };
+
+  const handleNextStep = () => {
+      if (step === 1 && !formData.selectedId) return toast.error("Selecione uma opção.");
+      if (step === 2 && !formData.locationId) return toast.error("Selecione a unidade.");
+      if (step === 3 && (!formData.currentStaffId || !formData.currentDate)) return toast.error("Selecione profissional e data.");
+      if (step === 4 && !formData.currentTime) return toast.error("Selecione um horário.");
+
+      if (step === 4) {
+          const newSession = {
+              service: currentServiceToSchedule,
+              staffId: formData.currentStaffId,
+              staffName: allStaff.find(s => s.id === formData.currentStaffId)?.name,
+              date: formData.currentDate!,
+              time: formData.currentTime
+          };
+          setPackageSessions([...packageSessions, newSession]);
+
+          if (currentSessionIndex < orderedServices.length - 1) {
+              setCurrentSessionIndex(prev => prev + 1);
+              setFormData(f => ({ ...f, currentDate: undefined, currentTime: '', currentStaffId: '' }));
+              toast.success(`Sessão ${currentSessionIndex + 1} definida! Escolha a próxima.`);
+              setStep(3); 
+          } else {
+              setStep(5);
+          }
+      } else {
+          setStep(s => s + 1);
       }
   };
 
   const createAppointmentMutation = useMutation({
-    mutationFn: (payload: any) => appointmentsAPI.create(payload),
-    onSuccess: () => {
-        toast.success("Solicitação de agendamento enviada!", {
-            description: "Verifique seu WhatsApp para o pagamento do sinal."
-        });
-        setStep(5);
-        queryClient.invalidateQueries({ queryKey: ['appointments'] });
-    },
-    onError: (err: any) => toast.error(err.message || "Erro ao agendar.")
+    mutationFn: async (payload: any) => appointmentsAPI.create(payload),
+    onSuccess: () => {}, 
+    onError: (err: any) => toast.error("Erro ao agendar: " + err.message)
   });
 
-  const handleFinalize = () => {
-      // 🔥 CORREÇÃO CRÍTICA: Usar toLocalISOString em vez de toISOString
-      const [h, m] = formData.time.split(':').map(Number);
-      const start = setMinutes(setHours(formData.date, h), m);
-      
-      const items = orderedServices.map(s => ({
-          service: s.id,
-          staff: formData.serviceStaffMapping[s.id]
-      }));
+  const handleFinalize = async () => {
+      if (!formData.customerName || !formData.customerPhone) return toast.error("Preencha seus dados.");
+      if (!consentGiven) return toast.error("É necessário aceitar os termos.");
 
-      const rawNumbers = formData.customerPhone.replace(/\D/g, "");
-      const fullPhone = `55${rawNumbers}`;
+      try {
+          for (let i = 0; i < packageSessions.length; i++) {
+              const session = packageSessions[i];
+              const [h, m] = session.time.split(':').map(Number);
+              const start = setMinutes(setHours(session.date, h), m);
+              const end = addMinutes(start, session.service.default_duration_min || 30);
+              
+              // Monta a nota final com a observação do cliente
+              const systemNote = `Sessão ${i+1}/${packageSessions.length} - ${selectedPromo?.title || 'Avulso'}`;
+              const finalNote = userNotes ? `${systemNote}\nObs do Cliente: ${userNotes}` : systemNote;
 
-      createAppointmentMutation.mutate({
-          customer_name: formData.customerName,
-          customer_phone: fullPhone, 
-          customer_email: formData.customerEmail,
-          location: formData.locationId,
-          start_time: toLocalISOString(start), // 🔥 AQUI ESTÁ A CORREÇÃO
-          items: items
-      });
-  };
-
-  const handleNextStep = () => {
-      if (step === 1) {
-          if (formData.selectedServiceIds.length === 0) {
-              toast.error("Selecione pelo menos um serviço.");
-              return;
+              await appointmentsAPI.create({
+                  customer_name: formData.customerName,
+                  customer_phone: `55${cleanPhone(formData.customerPhone)}`, 
+                  customer_email: formData.customerEmail,
+                  location: formData.locationId,
+                  staff: session.staffId,
+                  service: session.service.id,
+                  start_time: toLocalISOString(start),
+                  end_time: toLocalISOString(end),
+                  status: 'pending',
+                  notes: finalNote,
+              });
           }
-          setStep(2);
-      } 
-      else if (step === 2) {
-          if (!formData.locationId) {
-              toast.error("Selecione a unidade de atendimento.");
-              return;
-          }
-          const allServicesHaveStaff = formData.selectedServiceIds.every(sId => formData.serviceStaffMapping[sId]);
-          if (!allServicesHaveStaff) {
-              toast.error("Selecione um profissional para cada serviço.");
-              return;
-          }
-          if (!formData.date) {
-              toast.error("Selecione uma data.");
-              return;
-          }
-          setStep(3);
-      }
-      else if (step === 3) {
-          if (!formData.time) {
-              toast.error("Selecione um horário.");
-              return;
-          }
-          setStep(4);
+          toast.success("Agendamentos realizados com sucesso!");
+          setStep(6);
+          queryClient.invalidateQueries({ queryKey: ['appointments'] });
+      } catch (error) {
+          console.error(error);
+          toast.error("Houve um erro ao processar. Tente novamente.");
       }
   };
 
-  // --- RENDERIZAÇÃO ---
-  const renderStepContent = () => {
-      const renderBold = (text: string | undefined) => <span className="font-semibold">{text || 'N/A'}</span>;
-      
-      switch(step) {
-          case 1:
-            return (
-                <div className="space-y-6">
-                    <div className="flex items-center justify-between">
-                        <h2 className="text-xl font-semibold flex items-center gap-2">
-                            <Scissors className="w-5 h-5 text-primary" /> Selecione os Serviços
-                        </h2>
-                        {formData.selectedServiceIds.length > 0 && (
-                            <Badge variant="secondary">{formData.selectedServiceIds.length} selecionado(s)</Badge>
-                        )}
-                    </div>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {services.map(s => (
-                            <Card key={s.id} 
-                                className={`p-4 cursor-pointer relative transition-all duration-200 ${
-                                    formData.selectedServiceIds.includes(s.id) 
-                                    ? 'border-primary border-2 bg-primary/5 shadow-sm' 
-                                    : 'border hover:border-primary/50'
-                                }`}
-                                onClick={() => handleServiceToggle(s.id)}>
-                                <div className="flex justify-between items-start mb-2">
-                                    <h3 className="font-semibold pr-6">{s.name}</h3>
-                                    {formData.selectedServiceIds.includes(s.id) && (
-                                        <div className="bg-primary text-primary-foreground rounded-full p-0.5 absolute top-3 right-3">
-                                            <Check className="w-3 h-3" />
-                                        </div>
-                                    )}
-                                </div>
-                                <div className="flex justify-between items-center text-sm text-muted-foreground">
-                                    <span>{s.default_duration_min} min</span>
-                                    <span className="font-medium text-foreground">R$ {(s.price_centavos/100).toFixed(2).replace('.', ',')}</span>
-                                </div>
-                            </Card>
-                        ))}
-                    </div>
-                    
-                    {formData.selectedServiceIds.length > 0 && (
-                        <Alert className="bg-muted/50 border-none">
-                            <div className="flex justify-between items-center w-full">
-                                <div className="text-sm">
-                                    <span className="text-muted-foreground">Total Estimado: </span>
-                                    <span className="font-semibold text-foreground">R$ {formattedPrice}</span>
-                                </div>
-                                <div className="text-sm">
-                                    <span className="text-muted-foreground">Duração: </span>
-                                    <span className="font-semibold text-foreground">{totalDuration} min</span>
-                                </div>
-                            </div>
-                        </Alert>
-                    )}
+  // --- RENDER ---
+  const renderStep1 = () => (
+    <div className="space-y-6 animate-in fade-in">
+        <div className="text-center space-y-2 mb-8">
+            <h2 className="text-2xl font-bold text-primary">Bem-vinda(o)!</h2>
+            <p className="text-muted-foreground">Escolha como quer se cuidar hoje.</p>
+        </div>
+        
+        <Tabs defaultValue="services" className="w-full">
+            <TabsList className="grid w-full grid-cols-3 mb-6 bg-muted/50 p-1 rounded-xl h-12">
+                <TabsTrigger value="services" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">Avulsos</TabsTrigger>
+                <TabsTrigger value="combos" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">Combos</TabsTrigger>
+                <TabsTrigger value="packages" className="rounded-lg data-[state=active]:bg-white data-[state=active]:shadow-sm">Pacotes</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="services" className="space-y-4">
+                <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar">
+                    {categories.map(cat => (
+                        <Badge key={cat} variant={selectedCategory === cat ? "default" : "outline"} className={`cursor-pointer px-4 py-1.5 text-sm ${selectedCategory === cat ? 'bg-primary hover:bg-primary/90' : 'hover:bg-muted'}`} onClick={() => setSelectedCategory(cat)}>{cat}</Badge>
+                    ))}
                 </div>
-            );
-
-          case 2:
-            return (
-                <div className="space-y-6">
-                     <h2 className="text-xl font-semibold flex items-center gap-2">
-                        <User className="w-5 h-5 text-primary" /> Profissionais e Data
-                     </h2>
-                     
-                     <div className="grid gap-6 md:grid-cols-2">
-                        <div className="space-y-5">
-                            <div className="space-y-2">
-                                <Label>Unidade de Atendimento</Label>
-                                <Select value={formData.locationId} onValueChange={v => setFormData(f => ({...f, locationId: v, serviceStaffMapping: {}, time: ''}))}>
-                                    <SelectTrigger><SelectValue placeholder="Selecione a unidade" /></SelectTrigger>
-                                    <SelectContent>{locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
-                                </Select>
-                            </div>
-
-                            {formData.locationId && (
-                                <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
-                                    <Label className="text-muted-foreground text-xs uppercase tracking-wider">Quem vai te atender?</Label>
-                                    {orderedServices.map(service => {
-                                        const staffList = getStaffForService(service.id);
-                                        return (
-                                            <div key={service.id} className="space-y-1.5">
-                                                <Label className="text-sm font-medium">{service.name}</Label>
-                                                <Select 
-                                                   value={formData.serviceStaffMapping[service.id] || ''} 
-                                                   onValueChange={v => handleStaffSelect(service.id, v)}
-                                                >
-                                                    <SelectTrigger>
-                                                        <SelectValue placeholder="Escolha o profissional" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        {staffList.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-                                                    </SelectContent>
-                                                </Select>
-                                                {staffList.length === 0 && <p className="text-xs text-red-500">Sem profissionais disponíveis nesta unidade.</p>}
-                                            </div>
-                                        )
-                                    })}
-                                </div>
-                            )}
+                <div className="grid grid-cols-1 gap-3">
+                    {services.filter(s => selectedCategory === "Todos" || s.category === selectedCategory).map(s => (
+                        <div key={s.id} onClick={() => handleSelectService(s)} className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex justify-between items-center ${formData.selectedId === s.id ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:border-primary/50 hover:bg-muted/30'}`}>
+                            <div><h3 className="font-semibold text-foreground">{s.name}</h3><p className="text-sm text-muted-foreground mt-0.5">{s.default_duration_min} min</p></div>
+                            <span className="font-bold text-primary">R$ {(s.price_centavos/100).toFixed(2).replace('.',',')}</span>
                         </div>
-
-                        <div className="flex justify-center items-start">
-                            {Object.keys(formData.serviceStaffMapping).length === formData.selectedServiceIds.length && formData.selectedServiceIds.length > 0 ? (
-                                <div className="border rounded-lg p-4 shadow-sm animate-in zoom-in-95">
-                                    <Calendar 
-                                        mode="single" 
-                                        selected={formData.date} 
-                                        onSelect={d => d && setFormData(f => ({...f, date: d, time: ''}))} 
-                                        locale={ptBR} 
-                                        disabled={d => isPast(d) && !isSameDay(d, new Date())} 
-                                        className="rounded-md border-none"
-                                    />
-                                </div>
-                            ) : (
-                                <div className="h-full flex items-center justify-center text-center p-6 border-2 border-dashed rounded-lg text-muted-foreground bg-muted/10">
-                                    <p className="text-sm">Selecione a unidade e os profissionais para ver o calendário.</p>
-                                </div>
-                            )}
-                        </div>
-                     </div>
+                    ))}
                 </div>
-            );
+            </TabsContent>
 
-          case 3:
-             return (
-                 <div className="space-y-6">
-                     <h2 className="text-xl font-semibold flex items-center gap-2">
-                        <Clock className="w-5 h-5 text-primary" /> Horários Disponíveis
-                     </h2>
-                     <Alert>
-                         <AlertDescription>
-                             Os horários abaixo consideram a duração total dos serviços em sequência.
-                         </AlertDescription>
-                     </Alert>
-                     <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                         {availableSlots.map(slot => (
-                             <Button 
-                                key={slot} 
-                                variant={formData.time === slot ? 'default' : 'outline'} 
-                                onClick={() => setFormData(f => ({...f, time: slot}))}
-                                className="w-full"
-                             >
-                                 {slot}
-                             </Button>
-                         ))}
-                     </div>
-                     {availableSlots.length === 0 && (
-                         <div className="text-center py-8 text-muted-foreground bg-muted/20 rounded-lg">
-                             <p>Não há sequência de horários disponível para esses profissionais.</p>
-                             <Button variant="ghost" onClick={() => setStep(2)}>Tentar outra data</Button>
-                         </div>
-                     )}
-                 </div>
-             );
+            <TabsContent value="combos" className="space-y-3">
+                {promotions.filter(p => p.type === 'combo').map(p => (
+                    <div key={p.id} onClick={() => handleSelectPromotion(p)} className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 ${formData.selectedId === p.id ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:border-primary/50 hover:bg-muted/30'}`}>
+                        <div className="flex justify-between items-start mb-2"><h3 className="font-semibold flex items-center gap-2"><Tag className="w-4 h-4 text-orange-500"/> {p.title}</h3><span className="font-bold text-primary">R$ {(p.price_centavos/100).toFixed(2).replace('.',',')}</span></div>
+                        <p className="text-sm text-muted-foreground">{p.description}</p>
+                    </div>
+                ))}
+            </TabsContent>
 
-          case 4:
-             return (
-                 <div className="space-y-6">
-                     <h2 className="text-xl font-semibold flex items-center gap-2">
-                        <CalendarCheck className="w-5 h-5 text-primary" /> Confirmar Agendamento
-                     </h2>
-                     
-                     <Card className="overflow-hidden border-2">
-                         <div className="bg-muted/40 p-4 border-b flex justify-between items-center">
-                             <div className="flex items-center gap-2">
-                                 <MapPin className="w-4 h-4 text-muted-foreground" />
-                                 <span className="font-medium">{selectedLocation?.name}</span>
-                             </div>
-                             <Badge variant="outline" className="bg-background">
-                                {format(formData.date, "dd 'de' MMMM", { locale: ptBR })} às {formData.time}
-                             </Badge>
-                         </div>
-
-                         <div className="p-6 space-y-6">
-                             <div className="space-y-3">
-                                 <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Serviços em Sequência</h3>
-                                 <div className="divide-y">
-                                     {orderedServices.map((s, idx) => {
-                                         const staffName = allStaff.find(st => st.id === formData.serviceStaffMapping[s.id])?.name;
-                                         return (
-                                             <div key={s.id} className="py-3 flex justify-between items-center first:pt-0 last:pb-0">
-                                                 <div>
-                                                     <div className="flex items-center gap-2">
-                                                         <Badge variant="outline" className="h-5 w-5 flex items-center justify-center p-0 text-xs">{idx + 1}</Badge>
-                                                         <p className="font-medium text-base">{s.name}</p>
-                                                     </div>
-                                                     <p className="text-sm text-muted-foreground flex items-center gap-1 ml-7">
-                                                        <User className="w-3 h-3" /> {staffName}
-                                                     </p>
-                                                 </div>
-                                                 <div className="text-right">
-                                                     <p className="font-medium text-sm">{s.default_duration_min} min</p>
-                                                     <p className="text-sm text-muted-foreground">R$ {(s.price_centavos/100).toFixed(2).replace('.', ',')}</p>
-                                                 </div>
-                                             </div>
-                                         )
-                                     })}
-                                 </div>
-                             </div>
-
-                             <Separator />
-
-                             <div className="flex justify-between items-end">
-                                 <div>
-                                     <p className="text-sm text-muted-foreground mb-1">Tempo Total Estimado</p>
-                                     <div className="flex items-baseline gap-1">
-                                         <Clock className="w-4 h-4 text-primary" />
-                                         <span className="text-xl font-bold">{totalDuration}</span>
-                                         <span className="text-sm font-medium text-muted-foreground">minutos</span>
-                                     </div>
-                                 </div>
-                                 <div className="text-right">
-                                     <p className="text-sm text-muted-foreground mb-1">Valor Total</p>
-                                     <p className="text-2xl font-bold text-primary">R$ {formattedPrice}</p>
-                                 </div>
-                             </div>
-                         </div>
-                     </Card>
-
-                     <div className="grid gap-4 pt-2">
-                         <div className="space-y-2">
-                             <Label htmlFor="phone">WhatsApp</Label>
-                             <div className="relative flex items-center">
-                                 <div className="absolute left-3 text-muted-foreground text-sm font-medium">+55</div>
-                                 <Input 
-                                    id="phone" 
-                                    placeholder="(11) 99999-9999" 
-                                    value={formData.customerPhone} 
-                                    onChange={handlePhoneChange} 
-                                    onBlur={handlePhoneBlur} 
-                                    disabled={isCheckingPhone}
-                                    className="pl-12"
-                                 />
-                                 {isCheckingPhone && (
-                                     <div className="absolute right-3">
-                                         <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                                     </div>
-                                 )}
-                             </div>
-                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label htmlFor="name">Nome Completo</Label>
-                                <Input id="name" placeholder="Digite seu nome" value={formData.customerName} onChange={e => setFormData(f => ({...f, customerName: e.target.value}))} />
-                            </div>
-                            <div className="space-y-2">
-                                <Label htmlFor="email">E-mail (Opcional)</Label>
-                                <Input id="email" type="email" placeholder="seu@email.com" value={formData.customerEmail} onChange={e => setFormData(f => ({...f, customerEmail: e.target.value}))} />
-                            </div>
-                        </div>
-                     </div>
-                 </div>
-             );
-
-          case 5:
-             return (
-                 <div className="flex flex-col items-center justify-center py-16 text-center animate-in fade-in zoom-in duration-500">
-                     <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6">
-                         <Check className="w-12 h-12 text-green-600" />
-                     </div>
-                     <h2 className="text-3xl font-bold text-green-800 mb-2">Pré-Agendamento Confirmado!</h2>
-                     <p className="text-muted-foreground max-w-md">
-                         Obrigado, <strong>{formData.customerName}</strong>. Seu horário está em pré-reserva. 
-                         <br/><br/>
-                         Enviamos os dados para pagamento do <strong>sinal (10%)</strong> no seu WhatsApp para confirmar o agendamento.
-                     </p>
-                     <div className="mt-8 space-x-4">
-                        <Button variant="outline" onClick={() => window.location.reload()}>Novo Agendamento</Button>
-                     </div>
-                 </div>
-             );
-      }
-  };
+            <TabsContent value="packages" className="space-y-3">
+                {promotions.filter(p => p.type === 'package').map(p => (
+                    <div key={p.id} onClick={() => handleSelectPromotion(p)} className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 ${formData.selectedId === p.id ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:border-primary/50 hover:bg-muted/30'}`}>
+                        <div className="flex justify-between items-start mb-2"><h3 className="font-semibold flex items-center gap-2"><Package className="w-4 h-4 text-purple-500"/> {p.title}</h3><span className="font-bold text-primary">R$ {(p.price_centavos/100).toFixed(2).replace('.',',')}</span></div>
+                        <p className="text-sm text-muted-foreground">{p.description}</p>
+                        <div className="mt-3 flex gap-2"><Badge variant="secondary" className="text-xs font-normal">{p.items.length} sessões</Badge>{p.days_to_expire && <Badge variant="outline" className="text-xs font-normal text-muted-foreground">Validade: {p.days_to_expire} dias</Badge>}</div>
+                    </div>
+                ))}
+            </TabsContent>
+        </Tabs>
+    </div>
+  );
 
   return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-muted/20 py-8 px-4">
-          <div className="max-w-3xl mx-auto">
-              <div className="text-center mb-10">
-                  <h1 className="text-3xl font-bold text-primary tracking-tight mb-2">Agendamento Online</h1>
-                  <p className="text-muted-foreground">Reserve seu horário de forma rápida e fácil</p>
-              </div>
+      <div className="min-h-screen bg-gray-50 flex flex-col items-center py-6 px-4 md:px-0">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
               
-              <Card className="p-6 md:p-8 shadow-lg border-t-4 border-t-primary">
-                  {step < 5 && (
-                      <div className="mb-8">
-                          <div className="flex justify-between text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wider">
-                              <span className={step >= 1 ? "text-primary" : ""}>Serviços</span>
-                              <span className={step >= 2 ? "text-primary" : ""}>Profissional</span>
-                              <span className={step >= 3 ? "text-primary" : ""}>Horário</span>
-                              <span className={step >= 4 ? "text-primary" : ""}>Confirmação</span>
-                          </div>
-                          <div className="h-2 bg-muted rounded-full overflow-hidden">
-                              <div 
-                                  className="h-full bg-primary transition-all duration-500 ease-out" 
-                                  style={{ width: `${(step / 4) * 100}%` }}
-                              />
+              {/* Header com Progresso */}
+              <div className="bg-white p-6 border-b">
+                  <div className="flex justify-between items-center mb-4">
+                      {step > 1 && step < 6 ? (
+                          <Button variant="ghost" size="sm" className="-ml-3 h-8 text-muted-foreground" onClick={() => setStep(s => s - 1)}>
+                              <ArrowLeft className="w-4 h-4 mr-1"/> Voltar
+                          </Button>
+                      ) : <div/>}
+                      <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Passo {step} de 5</span>
+                  </div>
+                  <div className="h-1.5 w-full bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-primary transition-all duration-500 ease-out" style={{ width: `${(step/5)*100}%` }}/>
+                  </div>
+              </div>
+
+              <div className="p-6">
+                  {step === 1 && renderStep1()}
+                  
+                  {step === 2 && (
+                      <div className="space-y-6 animate-in fade-in">
+                          <h2 className="text-xl font-semibold text-center">Onde você prefere ser atendida?</h2>
+                          <div className="grid gap-3">
+                              {locations.map(l => (
+                                  <button key={l.id} className={`w-full p-4 rounded-xl border flex items-center gap-4 transition-all ${formData.locationId === l.id ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/50'}`} onClick={() => setFormData(f => ({...f, locationId: l.id}))}>
+                                      <div className={`p-2 rounded-full ${formData.locationId === l.id ? 'bg-primary text-white' : 'bg-muted text-muted-foreground'}`}><MapPin className="w-5 h-5"/></div>
+                                      <span className="font-medium text-lg">{l.name}</span>
+                                  </button>
+                              ))}
                           </div>
                       </div>
                   )}
 
-                  {renderStepContent()}
-                  
-                  {step < 5 && (
-                      <div className="flex justify-between mt-8 pt-6 border-t">
-                          <Button 
-                            variant="ghost" 
-                            onClick={() => setStep(s => s - 1)} 
-                            disabled={step === 1 || createAppointmentMutation.isPending}
-                          >
-                              Voltar
-                          </Button>
+                  {(step === 3 || step === 4) && (
+                      <div className="space-y-6 animate-in fade-in">
+                          <div className="bg-primary/5 p-4 rounded-xl border border-primary/10 text-center">
+                              <span className="text-xs font-bold uppercase tracking-wider text-primary/70">Agendando</span>
+                              <h3 className="font-bold text-lg text-primary mt-1">Sessão {currentSessionIndex + 1} de {orderedServices.length}</h3>
+                              <p className="text-sm text-foreground/80">{currentServiceToSchedule?.name}</p>
+                              {selectedPromo?.min_interval_days ? <p className="text-xs text-muted-foreground mt-2 bg-white/50 py-1 rounded inline-block px-2">Intervalo de {selectedPromo.min_interval_days} dias aplicado</p> : null}
+                          </div>
 
-                          {step < 4 ? (
-                              <Button 
-                                onClick={handleNextStep} 
-                                disabled={createAppointmentMutation.isPending}
-                                className="pl-8 pr-6"
-                              >
-                                  Próximo <ArrowRight className="ml-2 w-4 h-4" />
-                              </Button>
-                          ) : (
+                          {step === 3 && (
+                              <div className="space-y-6">
+                                  <div className="space-y-2">
+                                      <Label>Profissional</Label>
+                                      <Select value={formData.currentStaffId} onValueChange={v => setFormData(f => ({...f, currentStaffId: v, currentTime: ''}))}>
+                                          <SelectTrigger className="h-12 rounded-xl"><SelectValue placeholder="Selecione..."/></SelectTrigger>
+                                          <SelectContent>{getStaffForService(currentServiceToSchedule?.id).map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+                                      </Select>
+                                  </div>
+                                  <div className="flex justify-center border rounded-xl p-2 bg-white">
+                                      <Calendar mode="single" selected={formData.currentDate} onSelect={d => d && setFormData(f => ({...f, currentDate: d, currentTime: ''}))} locale={ptBR} disabled={isDateDisabled} />
+                                  </div>
+                              </div>
+                          )}
+
+                          {step === 4 && (
+                              <div>
+                                  <h3 className="font-semibold mb-4 text-center">Horários para {format(formData.currentDate!, 'dd/MM')}</h3>
+                                  <div className="grid grid-cols-4 gap-2">
+                                      {availableSlots.map(slot => (<Button key={slot} variant={formData.currentTime === slot ? 'default' : 'outline'} onClick={() => setFormData(f => ({...f, currentTime: slot}))} className="rounded-lg h-10">{slot}</Button>))}
+                                  </div>
+                                  {availableSlots.length === 0 && <p className="text-center text-muted-foreground py-8">Sem horários disponíveis.</p>}
+                              </div>
+                          )}
+                      </div>
+                  )}
+
+                  {/* 💡 ETAPA FINAL ATUALIZADA */}
+                  {step === 5 && (
+                      <div className="space-y-6 animate-in fade-in">
+                          <h2 className="text-xl font-bold text-center">Confirme seus dados</h2>
+                          
+                          <Card className="bg-muted/20 border-none p-4 space-y-3 rounded-xl">
+                              <h3 className="font-semibold text-sm uppercase tracking-wider text-muted-foreground mb-2">Resumo do Agendamento</h3>
+                              {packageSessions.map((s, idx) => (
+                                  <div key={idx} className="flex justify-between text-sm bg-white p-3 rounded-lg shadow-sm">
+                                      <div><span className="font-medium">{s.service.name}</span><br/><span className="text-xs text-muted-foreground">{s.staffName}</span></div>
+                                      <div className="text-right font-medium">{format(s.date, 'dd/MM')} <br/> {s.time}</div>
+                                  </div>
+                              ))}
+                              <div className="flex justify-between items-center pt-3 border-t border-dashed">
+                                  <span>Total</span>
+                                  <span className="text-xl font-bold text-primary">R$ {formattedPrice}</span>
+                              </div>
+                          </Card>
+
+                          <div className="space-y-4">
+                              <div className="space-y-2"><Label>WhatsApp</Label><Input className="h-12 rounded-lg" value={formData.customerPhone} onChange={e => setFormData(f => ({...f, customerPhone: formatPhoneDisplay(e.target.value)}))} onBlur={handlePhoneBlur} placeholder="(11) 99999-9999" disabled={isCheckingPhone}/></div>
+                              <div className="space-y-2"><Label>Nome Completo</Label><Input className="h-12 rounded-lg" value={formData.customerName} onChange={e => setFormData(f => ({...f, customerName: e.target.value}))}/></div>
+                              
+                              {/* 💡 CAMPO DE OBSERVAÇÃO */}
+                              <div className="space-y-2">
+                                  <Label>Observações (Opcional)</Label>
+                                  <Textarea 
+                                    className="resize-none rounded-lg" 
+                                    placeholder="Tem alguma preferência ou alergia?" 
+                                    value={userNotes}
+                                    onChange={e => setUserNotes(e.target.value)}
+                                  />
+                              </div>
+
+                              {/* 💡 TERMO DE CONSENTIMENTO */}
+                              <div className="flex items-start space-x-3 pt-2">
+                                  <Checkbox id="terms" checked={consentGiven} onCheckedChange={(c) => setConsentGiven(c as boolean)} />
+                                  <label htmlFor="terms" className="text-xs text-muted-foreground leading-snug cursor-pointer">
+                                      Autorizo o processamento dos meus dados (nome e telefone) exclusivamente para a confirmação e gestão deste agendamento.
+                                  </label>
+                              </div>
+                          </div>
+                      </div>
+                  )}
+
+                  {step === 6 && (
+                     <div className="py-12 text-center animate-in zoom-in">
+                         <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6"><Check className="w-10 h-10 text-green-600"/></div>
+                         <h2 className="text-2xl font-bold text-green-800 mb-2">Tudo Certo!</h2>
+                         <p className="text-muted-foreground mb-8">Seu pré-agendamento foi realizado. Enviamos os detalhes de confirmação para o seu WhatsApp.</p>
+                         <Button className="w-full h-12 rounded-xl" onClick={() => window.location.reload()}>Fazer Novo Agendamento</Button>
+                     </div>
+                  )}
+
+                  {step < 6 && (
+                      <div className="mt-8">
+                          {step === 5 ? (
                               <Button 
                                 onClick={handleFinalize} 
-                                disabled={
-                                    !formData.customerName || 
-                                    !formData.customerPhone || 
-                                    createAppointmentMutation.isPending
-                                }
-                                className="bg-green-600 hover:bg-green-700 text-white pl-8 pr-6"
+                                className="w-full h-12 rounded-xl text-base font-semibold shadow-lg shadow-primary/20" 
+                                disabled={!formData.customerName || !formData.customerPhone || !consentGiven || createAppointmentMutation.isPending}
                               >
-                                  {createAppointmentMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 w-4 h-4" />}
-                                  Confirmar Agendamento
+                                  {createAppointmentMutation.isPending ? <Loader2 className="animate-spin mr-2"/> : "Finalizar Agendamento"}
+                              </Button>
+                          ) : (
+                              <Button onClick={handleNextStep} disabled={step===2 && !formData.locationId || step===3 && !formData.currentDate || step===4 && !formData.currentTime} className="w-full h-12 rounded-xl text-base font-semibold">
+                                  Continuar
                               </Button>
                           )}
                       </div>
                   )}
-              </Card>
+              </div>
           </div>
       </div>
   );

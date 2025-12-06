@@ -319,6 +319,11 @@ class Promotion(models.Model):
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
+    # 💡 NOVOS CAMPOS PARA REGRAS DE PACOTE
+    days_to_expire = models.IntegerField(default=30, help_text="Validade do pacote em dias")
+    min_interval_days = models.IntegerField(default=0, help_text="Mínimo de dias entre sessões")
+    suggested_interval_days = models.IntegerField(default=15, help_text="Intervalo sugerido (ex: 15 dias para manutenção)")
+    
     class Meta:
         managed = False
         db_table = 'promotions'
