@@ -1,3 +1,4 @@
+from django.contrib import admin # <--- IMPORTANTE: Adicione esta linha
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -11,6 +12,7 @@ from .views import (
 )
 
 router = DefaultRouter()
+# ... (Mantenha todos os seus routers registrados aqui) ...
 router.register(r'locations', LocationViewSet)
 router.register(r'staff', StaffViewSet, basename='staff')
 router.register(r'services', ServiceViewSet)
@@ -28,7 +30,13 @@ router.register(r'permissions', PermissionViewSet, basename='permissions')
 router.register(r'promotions', PromotionViewSet, basename='promotions')
 
 urlpatterns = [
-    path('', include(router.urls)),
+    # 👇 AQUI ESTÁ O PULO DO GATO:
+    path('admin/', admin.site.urls), # Habilita o /admin
+
+    path('api/', include(router.urls)), # Sugiro prefixar sua API com /api/ para organizar
+    # OU se preferir manter na raiz como estava antes:
+    # path('', include(router.urls)),
+
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('users/me/', CurrentUserView.as_view(), name='current_user'),

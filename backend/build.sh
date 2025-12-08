@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Sair se houver erro
+# exit on error
 set -o errexit
 
-# Instalar dependências
 pip install -r requirements.txt
 
-# Coletar arquivos estáticos (CSS do admin, etc)
 python manage.py collectstatic --no-input
-
-# Aplicar migrações no banco de dados
 python manage.py migrate
+
+python create_admin.py
