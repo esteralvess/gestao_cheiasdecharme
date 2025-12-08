@@ -1,10 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
-// 🚨 NOVO: Importa as utilidades para resolver caminho em ES Modules
 import { fileURLToPath } from 'url'
 
-// 🚨 Define __dirname/___filename manualmente para compatibilidade com path.resolve
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
@@ -13,7 +11,6 @@ export default defineConfig({
 
   resolve: {
     alias: {
-      // Usa a variável __dirname redefinida para mapear os aliases
       '@': path.resolve(__dirname, './src'),
       '@hooks': path.resolve(__dirname, './src/hooks'),
       '@lib': path.resolve(__dirname, './src/lib'),
@@ -22,11 +19,12 @@ export default defineConfig({
     }
   },
 
-  // O root deve ser a pasta 'frontend' (onde está o index.html)
   root: path.resolve(__dirname, '.'),
 
   build: {
-    outDir: path.resolve(__dirname, '../dist/public'),
+    // 💡 CORREÇÃO AQUI: Mudei para 'dist' simples.
+    // Isso garante que o build fique dentro da pasta do projeto frontend.
+    outDir: 'dist',
     emptyOutDir: true
   },
 
