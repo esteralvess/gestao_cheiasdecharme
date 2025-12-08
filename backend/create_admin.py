@@ -17,7 +17,14 @@ def create_superuser():
         User.objects.create_superuser(username, email, password)
         print("Superusuário criado com sucesso!")
     else:
-        print("Superusuário já existe. Nenhuma ação necessária.")
+        # 🔥 AQUI ESTÁ A CORREÇÃO:
+        print(f"Usuário {username} já existe. Forçando reset de senha...")
+        user = User.objects.get(username=username)
+        user.set_password(password)
+        user.is_superuser = True
+        user.is_staff = True
+        user.save()
+        print(f"Senha do usuário '{username}' foi redefinida para: {password}")
 
 if __name__ == "__main__":
     create_superuser()
