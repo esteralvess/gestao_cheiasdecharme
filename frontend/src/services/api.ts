@@ -1,13 +1,45 @@
-import { apiRequest } from "../lib/queryClient"; 
+import axios, { InternalAxiosRequestConfig, AxiosError, AxiosResponse } from 'axios';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+// URL base da API
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 
-// Função auxiliar para montar URLs sem erros de barra dupla
-const getUrl = (path: string) => {
-    const base = API_BASE.trim().replace(/\/+$/, '');
-    const normalizedPath = path.trim().replace(/^\/+/, '/');
-    return `${base}${normalizedPath}`;
-};
+const api = axios.create({
+  baseURL: API_URL,
+});
+
+// Interceptor de Requisição: Adiciona o Token
+api.interceptors.request.use(
+  (config: InternalAxiosRequestConfig) => {
+    const token = localStorage.getItem('accessToken') || sessionStorage.getItem('accessToken');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error: AxiosError) => {
+    return Promise.reject(error);
+  }
+);
+
+// Interceptor de Resposta: Trata Erros Globais (ex: Token Expirado)
+api.interceptors.response.use(
+  (response: AxiosResponse) => response,
+  (error: AxiosError) => {
+    if (error.response && error.response.status === 401) {
+      // Se der 401 (Unauthorized), limpa o token e redireciona para login
+      // Mas só se não estivermos já na tela de login, para evitar loop infinito
+      if (window.location.pathname !== '/login') {
+          console.warn("Sessão expirada. Redirecionando para login...");
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('refreshToken');
+          sessionStorage.removeItem('accessToken');
+          sessionStorage.removeItem('refreshToken');
+          window.location.href = '/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 interface DataPayload {
   [key: string]: any;
@@ -23,33 +55,31 @@ interface LoginPayload {
 // APIs de Autenticação (Auth)
 // ----------------------------------------------------
 export const authAPI = {
-   login: (payload: LoginPayload): Promise<any> => 
-    apiRequest("POST", getUrl("/token/"), { username: payload.username, password: payload.password })
-      .then((res: Response) => res.json())
-      .then(data => {
-        if (data.access) {
-            const storage = payload.rememberMe ? localStorage : sessionStorage;
-            storage.setItem('accessToken', data.access);
-        }
-        if (data.refresh) {
-            const storage = payload.rememberMe ? localStorage : sessionStorage;
-            storage.setItem('refreshToken', data.refresh); 
-        }
-        return data;
-      }),
+   login: async (payload: LoginPayload) => {
+    const response = await api.post("/token/", { username: payload.username, password: payload.password });
+    const data = response.data;
+    if (data.access) {
+        const storage = payload.rememberMe ? localStorage : sessionStorage;
+        storage.setItem('accessToken', data.access);
+    }
+    if (data.refresh) {
+        const storage = payload.rememberMe ? localStorage : sessionStorage;
+        storage.setItem('refreshToken', data.refresh); 
+    }
+    return data;
+   },
   
-  refresh: (refresh_token: string): Promise<any> => 
-    apiRequest("POST", getUrl("/token/refresh/"), { refresh: refresh_token })
-      .then((res: Response) => res.json())
-      .then(data => {
-        if (data.access) {
-            const storage = localStorage.getItem('refreshToken') ? localStorage : sessionStorage;
-            storage.setItem('accessToken', data.access);
-        }
-        return data;
-      }),
+  refresh: async (refresh_token: string) => {
+    const response = await api.post("/token/refresh/", { refresh: refresh_token });
+    const data = response.data;
+    if (data.access) {
+        const storage = localStorage.getItem('refreshToken') ? localStorage : sessionStorage;
+        storage.setItem('accessToken', data.access);
+    }
+    return data;
+  },
       
-  logout: (): void => {
+  logout: () => {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     sessionStorage.removeItem('accessToken');
@@ -58,22 +88,23 @@ export const authAPI = {
 };
 
 export const userAPI = {
-  getMe: (): Promise<any> => 
-    apiRequest("GET", getUrl("/users/me/"))
-      .then((res: Response) => res.json()),
-
-  updateMe: (data: DataPayload): Promise<any> => 
-    apiRequest("PUT", getUrl("/users/me/"), data)
-      .then((res: Response) => res.json()),
+  getMe: async () => {
+    const response = await api.get("/users/me/");
+    return response.data;
+  },
+  updateMe: async (data: DataPayload) => {
+    const response = await api.put("/users/me/", data);
+    return response.data;
+  }
 };
 
 export const adminAPI = {
-  getUsers: (): Promise<any[]> => apiRequest("GET", getUrl("/users/")).then(res => res.json()),
-  updateUser: (id: number, data: DataPayload): Promise<any> => apiRequest("PATCH", getUrl(`/users/${id}/`), data).then(res => res.json()),
-  createUser: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/users/"), data).then(res => res.json()),
-  setUserPassword: (id: number, password: string): Promise<any> => apiRequest("POST", getUrl(`/users/${id}/set-password/`), { password }).then(res => res.json()),
-  getGroups: (): Promise<any[]> => apiRequest("GET", getUrl("/groups/")).then(res => res.json()),
-  getPermissions: (): Promise<any[]> => apiRequest("GET", getUrl("/permissions/")).then(res => res.json()),
+  getUsers: async () => { const r = await api.get("/users/"); return r.data; },
+  updateUser: async (id: number, data: DataPayload) => { const r = await api.patch(`/users/${id}/`, data); return r.data; },
+  createUser: async (data: DataPayload) => { const r = await api.post("/users/", data); return r.data; },
+  setUserPassword: async (id: number, password: string) => { const r = await api.post(`/users/${id}/set-password/`, { password }); return r.data; },
+  getGroups: async () => { const r = await api.get("/groups/"); return r.data; },
+  getPermissions: async () => { const r = await api.get("/permissions/"); return r.data; },
 };
 
 // ----------------------------------------------------
@@ -81,120 +112,128 @@ export const adminAPI = {
 // ----------------------------------------------------
 
 export const locationsAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/locations/")).then((res: Response) => res.json()),
-  getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/locations/${id}/`)).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/locations/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PUT", getUrl(`/locations/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/locations/${id}/`)),
+  getAll: async () => { const r = await api.get("/locations/"); return r.data; },
+  getOne: async (id: string | number) => { const r = await api.get(`/locations/${id}/`); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/locations/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.put(`/locations/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/locations/${id}/`); return r.data; },
 };
 
 export const staffAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/staff/")).then((res: Response) => res.json()),
-  getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/staff/${id}/`)).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/staff/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PUT", getUrl(`/staff/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/staff/${id}/`)),
+  getAll: async () => { const r = await api.get("/staff/"); return r.data; },
+  getOne: async (id: string | number) => { const r = await api.get(`/staff/${id}/`); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/staff/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.put(`/staff/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/staff/${id}/`); return r.data; },
 };
 
 export const servicesAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/services/")).then((res: Response) => res.json()),
-  getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/services/${id}/`)).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/services/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PUT", getUrl(`/services/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/services/${id}/`)),
+  getAll: async () => { const r = await api.get("/services/"); return r.data; },
+  getOne: async (id: string | number) => { const r = await api.get(`/services/${id}/`); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/services/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.put(`/services/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/services/${id}/`); return r.data; },
 };
 
 export const customersAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/customers/")).then((res: Response) => res.json()),
-  getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/customers/${id}/`)).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/customers/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PUT", getUrl(`/customers/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/customers/${id}/`)),
+  getAll: async () => { const r = await api.get("/customers/"); return r.data; },
+  getOne: async (id: string | number) => { const r = await api.get(`/customers/${id}/`); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/customers/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.put(`/customers/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/customers/${id}/`); return r.data; },
   
-  redeemPoints: (id: string, data: { points_to_redeem: number }): Promise<any> => 
-    apiRequest("POST", getUrl(`/customers/${id}/redeem-points/`), data).then((res: Response) => res.json()),
+  redeemPoints: async (id: string, data: { points_to_redeem: number }) => {
+    const r = await api.post(`/customers/${id}/redeem-points/`, data);
+    return r.data;
+  },
   
-  adjustPoints: (id: string, data: { points_to_adjust: number }): Promise<any> => 
-    apiRequest("POST", getUrl(`/customers/${id}/adjust-points/`), data).then((res: Response) => res.json()),
+  adjustPoints: async (id: string, data: { points_to_adjust: number }) => {
+    const r = await api.post(`/customers/${id}/adjust-points/`, data);
+    return r.data;
+  },
     
-  // 💡 FUNÇÃO QUE ESTAVA FALTANDO
-  checkPhone: (phone: string): Promise<any> => 
-    apiRequest("GET", getUrl(`/customers/check-phone/?phone=${encodeURIComponent(phone)}`))
-      .then((res: Response) => res.json()),
+  checkPhone: async (phone: string) => {
+    const r = await api.get(`/customers/check-phone/?phone=${encodeURIComponent(phone)}`);
+    return r.data;
+  },
 };
 
 export const appointmentsAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/appointments/")).then((res: Response) => res.json()),
-  getOne: (id: string | number): Promise<any> => apiRequest("GET", getUrl(`/appointments/${id}/`)).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/appointments/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PATCH", getUrl(`/appointments/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/appointments/${id}/`)),
+  getAll: async () => { const r = await api.get("/appointments/"); return r.data; },
+  getOne: async (id: string | number) => { const r = await api.get(`/appointments/${id}/`); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/appointments/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.patch(`/appointments/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/appointments/${id}/`); return r.data; },
 };
 
 export const staffShiftsAPI = {
-  getAll: () => apiRequest("GET", getUrl("/staff_shifts/")).then((res: Response) => res.json()),
-  create: (data: DataPayload) => apiRequest("POST", getUrl("/staff_shifts/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload) => apiRequest("PUT", getUrl(`/staff_shifts/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number) => apiRequest("DELETE", getUrl(`/staff_shifts/${id}/`)).then((res: Response) => res.json()),  
+  getAll: async () => { const r = await api.get("/staff_shifts/"); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/staff_shifts/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.put(`/staff_shifts/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/staff_shifts/${id}/`); return r.data; },  
 };
 
 export const staffServicesAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/staff_services/")).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/staff_services/"), data).then((res: Response) => res.json()),
-  delete: (queryOrId: string | number): Promise<Response> => {
+  getAll: async () => { const r = await api.get("/staff_services/"); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/staff_services/", data); return r.data; },
+  delete: async (queryOrId: string | number) => {
     if (typeof queryOrId === 'string' && (queryOrId.startsWith('delete-by-params') || queryOrId.startsWith('?'))) {
         const path = queryOrId.startsWith('?') ? `delete-by-params/${queryOrId}` : queryOrId;
-        const url = getUrl(`/staff_services/${path}`);
-        return apiRequest("DELETE", url);
+        const r = await api.delete(`/staff_services/${path}`);
+        return r.data;
     }
-    return apiRequest("DELETE", getUrl(`/staff_services/${queryOrId}/`));
+    const r = await api.delete(`/staff_services/${queryOrId}/`);
+    return r.data;
   }
 };
 
 export const staffExceptionsAPI = {
-  getAll: () => apiRequest("GET", getUrl("/staff_exceptions/")).then((res: Response) => res.json()),
-  create: (data: DataPayload) => apiRequest("POST", getUrl("/staff_exceptions/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload) => apiRequest("PATCH", getUrl(`/staff_exceptions/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number) => apiRequest("DELETE", getUrl(`/staff_exceptions/${id}/`)).then((res: Response) => res.json()),
+  getAll: async () => { const r = await api.get("/staff_exceptions/"); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/staff_exceptions/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.patch(`/staff_exceptions/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/staff_exceptions/${id}/`); return r.data; },
 };
 
 export const staffCommissionsAPI = {
-  getAll: () => apiRequest("GET", getUrl("/staff_commissions/")).then((res: Response) => res.json()),
-  create: (data: DataPayload) => apiRequest("POST", getUrl("/staff_commissions/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload) => apiRequest("PATCH", getUrl(`/staff_commissions/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number) => apiRequest("DELETE", getUrl(`/staff_commissions/${id}/`)).then((res: Response) => res.json()),
+  getAll: async () => { const r = await api.get("/staff_commissions/"); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/staff_commissions/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.patch(`/staff_commissions/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/staff_commissions/${id}/`); return r.data; },
 };
 
 export const referralsAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/referrals/")).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/referrals/"), data).then((res: Response) => res.json()),
-  applyReward: (id: string): Promise<any> => apiRequest("POST", getUrl(`/referrals/${id}/apply-reward/`)).then((res: Response) => res.json()),
+  getAll: async () => { const r = await api.get("/referrals/"); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/referrals/", data); return r.data; },
+  applyReward: async (id: string) => { const r = await api.post(`/referrals/${id}/apply-reward/`); return r.data; },
 };
 
 export const expensesAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/expenses/")).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/expenses/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PUT", getUrl(`/expenses/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/expenses/${id}/`)),
+  getAll: async () => { const r = await api.get("/expenses/"); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/expenses/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.put(`/expenses/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/expenses/${id}/`); return r.data; },
 };
 
 export const reportsAPI = {
-  getRevenueByStaff: (startDate: string, endDate: string): Promise<any> => 
-    apiRequest("GET", getUrl(`/reports/revenue-by-staff/?start_date=${startDate}&end_date=${endDate}`))
-      .then((res: Response) => res.json()),
-
-  getRevenueByLocation: (startDate: string, endDate: string): Promise<any> => 
-    apiRequest("GET", getUrl(`/reports/revenue-by-location/?start_date=${startDate}&end_date=${endDate}`))
-      .then((res: Response) => res.json()),
-      
-  getRevenueByService: (startDate: string, endDate: string): Promise<any> => 
-    apiRequest("GET", getUrl(`/reports/revenue-by-service/?start_date=${startDate}&end_date=${endDate}`))
-      .then((res: Response) => res.json()),
+  getRevenueByStaff: async (startDate: string, endDate: string) => {
+    const r = await api.get(`/reports/revenue-by-staff/?start_date=${startDate}&end_date=${endDate}`);
+    return r.data;
+  },
+  getRevenueByLocation: async (startDate: string, endDate: string) => {
+    const r = await api.get(`/reports/revenue-by-location/?start_date=${startDate}&end_date=${endDate}`);
+    return r.data;
+  },
+  getRevenueByService: async (startDate: string, endDate: string) => {
+    const r = await api.get(`/reports/revenue-by-service/?start_date=${startDate}&end_date=${endDate}`);
+    return r.data;
+  },
 };
 
 export const promotionsAPI = {
-  getAll: (): Promise<any> => apiRequest("GET", getUrl("/promotions/")).then((res: Response) => res.json()),
-  create: (data: DataPayload): Promise<any> => apiRequest("POST", getUrl("/promotions/"), data).then((res: Response) => res.json()),
-  update: (id: string | number, data: DataPayload): Promise<any> => apiRequest("PUT", getUrl(`/promotions/${id}/`), data).then((res: Response) => res.json()),
-  delete: (id: string | number): Promise<Response> => apiRequest("DELETE", getUrl(`/promotions/${id}/`)),
+  getAll: async () => { const r = await api.get("/promotions/"); return r.data; },
+  create: async (data: DataPayload) => { const r = await api.post("/promotions/", data); return r.data; },
+  update: async (id: string | number, data: DataPayload) => { const r = await api.put(`/promotions/${id}/`, data); return r.data; },
+  delete: async (id: string | number) => { const r = await api.delete(`/promotions/${id}/`); return r.data; },
 };
+
+export default api;

@@ -23,7 +23,7 @@ import { appointmentsAPI, customersAPI, staffAPI, servicesAPI, locationsAPI, sta
 
 interface AppointmentFromAPI { id: string; customer_name: string; staff_name: string; service_name: string; location_name: string; start_time: string; end_time: string; status: 'pending' | 'confirmed' | 'completed' | 'cancelled'; notes?: string; customer: string; staff: string; service: string; location: string; cancelled_at?: string; }
 interface ProcessedAppointment { id: string; customerName: string; staffName: string; serviceName: string; locationName: string; startTime: Date; endTime: Date; status: 'pending' | 'confirmed' | 'completed' | 'cancelled'; notes?: string; customerId: string; staffId: string; serviceId: string; locationId: string; }
-interface Customer { id: string; full_name: string; is_truly_new?: boolean; points?: number; }
+interface Customer { id: string; full_name: string; is_truly_new?: boolean; points?: number; notes?: string; }
 interface Staff { id: string; name: string; }
 interface Service { id: string; name: string; price_centavos?: number; default_duration_min?: number; }
 interface Location { id: string; name: string; }
@@ -34,8 +34,6 @@ interface Referral { id: string; referrer_customer: string; status: 'completed';
 const ALL_FILTER_VALUE = "all";
 
 // 💡 FUNÇÃO DE PARSE CORRIGIDA
-// O backend envia ISO com timezone (ex: 2025-11-22T10:00:00-03:00). 
-// O parseISO lê isso e cria um objeto Date que representa esse momento exato.
 const parseAppointmentDate = (dateString: string): Date => {
   if (!dateString) return new Date();
   return parseISO(dateString);
@@ -183,7 +181,6 @@ function AppointmentEditModal({ appointment, customers, staff, services, locatio
     const finalStartTime = setSeconds(setMinutes(setHours(formData.date, startHour), startMinute), 0);
     const finalEndTime = setSeconds(setMinutes(setHours(formData.date, endHour), endMinute), 0);
     
-    // 💡 ENVIO: Formata como string Local (ISO sem Z) para garantir que o backend receba o horário visual
     const payload = {
       id: appointment.id, customer: formData.customerId, staff: formData.staffId, service: formData.serviceId, location: formData.locationId, 
       start_time: format(finalStartTime, "yyyy-MM-dd'T'HH:mm:ss"), 
@@ -218,6 +215,17 @@ function AppointmentEditModal({ appointment, customers, staff, services, locatio
         </DialogHeader>
         <div className="grid gap-4 py-4">
             
+            {/* ALERT DE OBSERVACAO DO CLIENTE (INDICAÇÃO) */}
+            {selectedCustomer?.notes && (
+              <Alert variant="default" className="bg-purple-50 border-purple-200 text-purple-800">
+                <Sparkles className="h-4 w-4" />
+                <AlertTitle>Observação do Cliente</AlertTitle>
+                <AlertDescription className="whitespace-pre-line font-medium">
+                  {selectedCustomer.notes}
+                </AlertDescription>
+              </Alert>
+            )}
+
             {selectedCustomer?.is_truly_new && (
               <Alert variant="default" className="bg-blue-50 border-blue-200 text-blue-800">
                 <Sparkles className="h-4 w-4" />

@@ -1,5 +1,5 @@
-import * as React from "react"; // Necessário para React.CSSProperties
-import { Switch, Route, Redirect } from "wouter"; // 🚨 ADICIONADO 'Redirect'
+import * as React from "react"; 
+import { Switch, Route, Redirect } from "wouter"; 
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -7,7 +7,13 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/AppSidebar";
 import ThemeToggle from "@/components/ThemeToggle";
+
+// --- PÁGINAS ---
 import Login from "@/pages/Login";
+import AgendamentoCliente from "@/pages/AgendamentoCliente"; // Página Pública
+import NotFound from "@/pages/not-found";
+
+// Páginas Administrativas
 import Dashboard from "@/pages/Dashboard";
 import Appointments from "@/pages/Appointments";
 import Customers from "@/pages/Customers";
@@ -16,29 +22,27 @@ import Services from "@/pages/Services";
 import Locations from "@/pages/Locations";
 import Payments from "@/pages/Payments";
 import Reports from "@/pages/Reports";
-import NotFound from "@/pages/not-found";
-import Profile from "./pages/Profile";
-import Management from "./pages/Management";
-import AgendamentoCliente from "./pages/AgendamentoCliente";
-import Promotions from "./pages/Promotions";
+import Profile from "@/pages/Profile";
+import Management from "@/pages/Management";
+import Promotions from "@/pages/Promotions";
 
-// 🚨 NOVO: Componente para verificar a autenticação
+// 🔒 COMPONENTE DE PROTEÇÃO (Verifica Login)
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  // Lógica do seu projeto antigo: verifica se o token está no localStorage
-  const token = localStorage.getItem('access_token')|| sessionStorage.getItem('accessToken');
+  // Verifica token no localStorage ou sessionStorage
+  const token = localStorage.getItem('access_token') || sessionStorage.getItem('accessToken');
   
   if (!token) {
-    // Redireciona o usuário para a tela de login se não houver token
+    // Se não tiver token, manda pro login
     return <Redirect to="/login" />;
   }
 
+  // Se tiver token, renderiza o conteúdo (MainLayout)
   return <>{children}</>;
 }
 
+// 🏠 LAYOUT DO PAINEL DE GESTÃO (Com Sidebar)
 function MainLayout() {
-  const style = {
-    "--sidebar-width": "16rem",
-  };
+  const style = { "--sidebar-width": "16rem" };
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
@@ -50,9 +54,10 @@ function MainLayout() {
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto bg-background">
-            {/* O Switch aqui não precisa ser alterado, pois as rotas serão renderizadas dentro do MainLayout */}
+            {/* ROTEADOR INTERNO (Só roda se estiver logado) */}
             <Switch>
               <Route path="/" component={Dashboard} />
+              <Route path="/dashboard" component={Dashboard} />
               <Route path="/appointments" component={Appointments} />
               <Route path="/customers" component={Customers} />
               <Route path="/staff" component={Staff} />
@@ -62,8 +67,9 @@ function MainLayout() {
               <Route path="/reports" component={Reports} />
               <Route path="/profile" component={Profile} />
               <Route path="/management" component={Management} />
-              <Route path="/agendamento-cliente" component={AgendamentoCliente} />
               <Route path="/promotions" component={Promotions} />
+              
+              {/* Se tentar acessar uma rota interna que não existe, cai aqui */}
               <Route component={NotFound} />
             </Switch>
           </main>
@@ -73,19 +79,26 @@ function MainLayout() {
   );
 }
 
-
+// 🚀 APLICAÇÃO PRINCIPAL
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
+        {/* ROTEADOR PRINCIPAL */}
         <Switch>
+          
+          {/* 1️⃣ ROTAS PÚBLICAS (Acesso Livre - SEM Layout Admin) */}
+          {/* Colocamos estas PRIMEIRO para o roteador achar elas antes de bloquear */}
+          <Route path="/agendamento-online" component={AgendamentoCliente} />
           <Route path="/login" component={Login} />
-          {/* 🚨 ROTAS PROTEGIDAS: Envolvemos todas as rotas (que estão no MainLayout) em PrivateRoute */}
+
+          {/* 2️⃣ ROTAS PROTEGIDAS (Qualquer outra coisa cai aqui) */}
           <Route>
             <PrivateRoute>
               <MainLayout />
             </PrivateRoute>
           </Route>
+
         </Switch>
         <Toaster />
       </TooltipProvider>

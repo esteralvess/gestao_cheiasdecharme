@@ -426,3 +426,14 @@ class PromotionSerializer(serializers.ModelSerializer):
                 PromotionItem.objects.create(promotion=instance, **item)
 
         return instance
+    
+# Adicione isso no final ou junto com os outros Appointment serializers
+
+class PublicAppointmentSerializer(serializers.ModelSerializer):
+    """
+    Serializer leve para uso público: Mostra apenas que o horário está ocupado,
+    sem revelar quem é o cliente ou o valor.
+    """
+    class Meta:
+        model = Appointment
+        fields = ['id', 'staff', 'start_time', 'end_time', 'status']
