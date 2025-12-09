@@ -1,4 +1,4 @@
-from django.contrib import admin # <--- IMPORTANTE: Adicione esta linha
+from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -11,8 +11,8 @@ from .views import (
     CurrentUserView, PromotionViewSet
 )
 
+# Registra as rotas dos ViewSets
 router = DefaultRouter()
-# ... (Mantenha todos os seus routers registrados aqui) ...
 router.register(r'locations', LocationViewSet)
 router.register(r'staff', StaffViewSet, basename='staff')
 router.register(r'services', ServiceViewSet)
@@ -30,19 +30,23 @@ router.register(r'permissions', PermissionViewSet, basename='permissions')
 router.register(r'promotions', PromotionViewSet, basename='promotions')
 
 urlpatterns = [
-    # 👇 AQUI ESTÁ O PULO DO GATO:
-    path('admin/', admin.site.urls), # Habilita o /admin
+    # Admin do Django
+    path('admin/', admin.site.urls),
 
-    path('api/', include(router.urls)), # Sugiro prefixar sua API com /api/ para organizar
-    # OU se preferir manter na raiz como estava antes:
-    # path('', include(router.urls)),
-
-    path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
-    path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    path('users/me/', CurrentUserView.as_view(), name='current_user'),
+    # ---------------------------------------------------------
+    # 🔥 MUDANÇA: TUDO DENTRO DE 'api/' PARA PADRONIZAR
+    # ---------------------------------------------------------
     
-    # Relatórios
-    path('reports/revenue-by-staff/', RevenueByStaffReport.as_view(), name='report_revenue_by_staff'),
-    path('reports/revenue-by-location/', RevenueByLocationReport.as_view(), name='report_revenue_by_location'),
-    path('reports/revenue-by-service/', RevenueByServiceReport.as_view(), name='report_revenue_by_service'),
+    # 1. Rotas do Router (CRUDs)
+    path('api/', include(router.urls)),
+
+    # 2. Rotas de Autenticação (Agora dentro de api/)
+    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('api/users/me/', CurrentUserView.as_view(), name='current_user'),
+    
+    # 3. Relatórios (Agora dentro de api/reports/)
+    path('api/reports/revenue-by-staff/', RevenueByStaffReport.as_view(), name='report_revenue_by_staff'),
+    path('api/reports/revenue-by-location/', RevenueByLocationReport.as_view(), name='report_revenue_by_location'),
+    path('api/reports/revenue-by-service/', RevenueByServiceReport.as_view(), name='report_revenue_by_service'),
 ]
