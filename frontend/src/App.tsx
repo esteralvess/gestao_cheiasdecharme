@@ -10,10 +10,10 @@ import ThemeToggle from "@/components/ThemeToggle";
 
 // --- PÁGINAS ---
 import Login from "@/pages/Login";
-import AgendamentoCliente from "@/pages/AgendamentoCliente"; // Página Pública
+import AgendamentoCliente from "@/pages/AgendamentoCliente"; // Sua página linda bege
 import NotFound from "@/pages/not-found";
 
-// Páginas Administrativas
+// Páginas Administrativas (Gestão)
 import Dashboard from "@/pages/Dashboard";
 import Appointments from "@/pages/Appointments";
 import Customers from "@/pages/Customers";
@@ -28,36 +28,44 @@ import Promotions from "@/pages/Promotions";
 
 // 🔒 COMPONENTE DE PROTEÇÃO (Verifica Login)
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  // Verifica token no localStorage ou sessionStorage
+  // Verifica se existe o token salvo
   const token = localStorage.getItem('access_token') || sessionStorage.getItem('accessToken');
   
   if (!token) {
-    // Se não tiver token, manda pro login
+    // Se não tiver token, chuta para o login
     return <Redirect to="/login" />;
   }
 
-  // Se tiver token, renderiza o conteúdo (MainLayout)
+  // Se tiver token, deixa entrar
   return <>{children}</>;
 }
 
-// 🏠 LAYOUT DO PAINEL DE GESTÃO (Com Sidebar)
+// 🏠 LAYOUT DO PAINEL DE GESTÃO (Com a Sidebar lateral)
 function MainLayout() {
   const style = { "--sidebar-width": "16rem" };
 
   return (
     <SidebarProvider style={style as React.CSSProperties}>
-      <div className="flex h-screen w-full">
+      <div className="flex h-screen w-full bg-[#F4F4F5] dark:bg-zinc-950">
         <AppSidebar />
         <div className="flex flex-col flex-1 overflow-hidden">
-          <header className="flex items-center justify-between p-4 border-b bg-background sticky top-0 z-10">
+          {/* Cabeçalho do Admin */}
+          <header className="flex items-center justify-between p-4 border-b bg-background sticky top-0 z-10 h-16 shadow-sm">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
+            <div className="font-semibold text-stone-700 dark:text-stone-200">
+               Painel de Gestão
+            </div>
             <ThemeToggle />
           </header>
-          <main className="flex-1 overflow-auto bg-background">
-            {/* ROTEADOR INTERNO (Só roda se estiver logado) */}
+          
+          {/* Conteúdo das Páginas de Gestão */}
+          <main className="flex-1 overflow-auto p-4 md:p-6">
             <Switch>
+              {/* Se acessar raiz logado, vai pro dashboard */}
               <Route path="/" component={Dashboard} />
               <Route path="/dashboard" component={Dashboard} />
+              
+              {/* Rotas do Sistema */}
               <Route path="/appointments" component={Appointments} />
               <Route path="/customers" component={Customers} />
               <Route path="/staff" component={Staff} />
@@ -69,7 +77,6 @@ function MainLayout() {
               <Route path="/management" component={Management} />
               <Route path="/promotions" component={Promotions} />
               
-              {/* Se tentar acessar uma rota interna que não existe, cai aqui */}
               <Route component={NotFound} />
             </Switch>
           </main>
@@ -84,15 +91,18 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        {/* ROTEADOR PRINCIPAL */}
         <Switch>
           
-          {/* 1️⃣ ROTAS PÚBLICAS (Acesso Livre - SEM Layout Admin) */}
-          {/* Colocamos estas PRIMEIRO para o roteador achar elas antes de bloquear */}
-          <Route path="/agendamento-online" component={AgendamentoCliente} />
+          {/* 1️⃣ ÁREA PÚBLICA (CLIENTE) */}
+          {/* A rota raiz "/" carrega o Agendamento Cliente (sem sidebar, sem login) */}
+          <Route path="/" component={AgendamentoCliente} />
+          
+          {/* Tela de Login */}
           <Route path="/login" component={Login} />
 
-          {/* 2️⃣ ROTAS PROTEGIDAS (Qualquer outra coisa cai aqui) */}
+          {/* 2️⃣ ÁREA PRIVADA (ADMIN) */}
+          {/* Qualquer outra rota que não seja as de cima, tentará entrar no painel */}
+          {/* O PrivateRoute vai barrar se não tiver login */}
           <Route>
             <PrivateRoute>
               <MainLayout />
