@@ -7,16 +7,15 @@ import { toast } from "sonner";
 import { authAPI } from "@/services/api"; 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Scissors, Eye, EyeOff, Loader2, AlertCircle } from "lucide-react";
+import { Eye, EyeOff, Loader2, AlertCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
-// 1. Define o schema de validação com Zod
+// Schema de validação
 const formSchema = z.object({
-  username: z.string().min(1, { message: "O nome de usuário é obrigatório." }),
+  username: z.string().min(1, { message: "O usuário é obrigatório." }),
   password: z.string().min(1, { message: "A senha é obrigatória." }),
   rememberMe: z.boolean().default(false).optional(),
 });
@@ -26,7 +25,6 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [serverError, setServerError] = useState("");
 
-  // 2. Configura o react-hook-form
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -38,120 +36,158 @@ export default function Login() {
 
   const { isSubmitting } = form.formState;
 
-  // 3. Função de submit atualizada
-  const onSubmit = async (values: z.infer<typeof formSchema>) => {
+  async function onSubmit(values: z.infer<typeof formSchema>) {
     setServerError("");
-
-    // 💡 CORREÇÃO: Cria um novo payload com os campos 'username' e 'password' limpos (.trim())
-    const payload = {
-        username: values.username.trim(), // Remove espaços em branco antes/depois
-        password: values.password.trim(), // Remove espaços em branco antes/depois
-        rememberMe: values.rememberMe,
-    };
-
     try {
-      // Envia o payload com os valores limpos para a API
-      await authAPI.login(payload); 
+      // 1. Tenta fazer login
+      await authAPI.login(values);
+      
+      // 2. Feedback de sucesso
+      toast.success("Bem-vindo(a) de volta!");
+      
+      // 3. Redireciona para o Dashboard (Gestão)
+      // Pequeno delay para garantir a gravação do token
+      setTimeout(() => {
+        setLocation("/dashboard"); 
+      }, 100);
 
-      toast.success("Login bem-sucedido!", {
-        description: "Redirecionando para o dashboard...",
-      });
-      setLocation('/'); 
-    } catch (err: any) {
-      console.error("Erro no login:", err); // Adicionado para debug no console
-      // A mensagem de erro é mantida, pois indica falha de autenticação
-      setServerError("Credenciais inválidas. Verifique seu usuário e senha.");
-      toast.error("Falha no login");
+    } catch (error: any) {
+      console.error("Erro no login:", error);
+      const msg = error.response?.data?.detail || "Usuário ou senha incorretos.";
+      setServerError(msg);
+      toast.error("Falha ao entrar");
     }
-  };
+  }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background to-muted p-4">
-      <Card className="w-full max-w-md p-8">
-        <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-            <Scissors className="w-8 h-8 text-primary" />
+    // Fundo bege suave igual ao do agendamento
+    <div className="min-h-screen w-full flex items-center justify-center bg-[#FDFCF8] p-4 font-sans">
+      <Card className="w-full max-w-[400px] shadow-xl border-stone-100 bg-white/80 backdrop-blur-sm">
+        <CardHeader className="flex flex-col items-center space-y-2 pt-10 pb-6">
+          
+          {/* 🖼️ LOGO DA MARCA */}
+          <div className="w-48 h-auto mb-2 flex justify-center items-center">
+             <img 
+               src="/img/logo.png" 
+               alt="Logo Cheias de Charme" 
+               className="object-contain max-h-28 w-auto drop-shadow-sm"
+               onError={(e) => {
+                 // Fallback caso a imagem não carregue
+                 e.currentTarget.style.display = 'none';
+                 e.currentTarget.parentElement!.innerHTML = '<span class="text-2xl font-serif text-[#C6A87C] font-bold">Cheias de Charme</span>';
+               }}
+             />
           </div>
-          <h1 className="text-2xl font-semibold text-foreground">Gestão Cheias de Charme</h1>
-          <p className="text-muted-foreground text-sm mt-1">Entre com suas credenciais</p>
-        </div>
 
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            <FormField
-              control={form.control}
-              name="username"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Usuário</FormLabel>
-                  <FormControl>
-                    <Input placeholder="Digite seu usuário" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            
-            <FormField
-              control={form.control}
-              name="password"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Senha</FormLabel>
-                  <FormControl>
-                    <div className="relative">
-                      <Input
-                        type={showPassword ? "text" : "password"}
-                        placeholder="••••••••"
-                        {...field}
-                        className="pr-10"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            
-            {serverError && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{serverError}</AlertDescription>
-              </Alert>
-            )}
+          <h1 className="font-medium tracking-wide text-stone-600 uppercase text-xs">
+            Painel Administrativo
+          </h1>
+        </CardHeader>
 
-            <div className="flex items-center justify-between text-sm">
+        <CardContent className="px-8 pb-10">
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              
+              {/* Campo Usuário */}
+              <FormField
+                control={form.control}
+                name="username"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-stone-600">Usuário</FormLabel>
+                    <FormControl>
+                      <Input placeholder="admin" {...field} className="bg-white border-stone-200 focus-visible:ring-[#C6A87C]" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {/* Campo Senha */}
+              <FormField
+                control={form.control}
+                name="password"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-stone-600">Senha</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <Input
+                          type={showPassword ? "text" : "password"}
+                          placeholder="••••••"
+                          {...field}
+                          className="bg-white border-stone-200 pr-10 focus-visible:ring-[#C6A87C]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-2.5 text-stone-400 hover:text-[#C6A87C] transition-colors"
+                        >
+                          {showPassword ? (
+                            <EyeOff className="h-4 w-4" />
+                          ) : (
+                            <Eye className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              
+              {/* Mensagem de Erro */}
+              {serverError && (
+                <Alert variant="destructive" className="py-2 bg-red-50 border-red-100 text-red-600">
+                  <AlertCircle className="h-4 w-4" />
+                  <AlertDescription>{serverError}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="flex items-center justify-between pt-2">
                 <FormField
                   control={form.control}
                   name="rememberMe"
                   render={({ field }) => (
                     <FormItem className="flex items-center space-x-2 space-y-0">
                       <FormControl>
-                        <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                          className="data-[state=checked]:bg-[#C6A87C] data-[state=checked]:border-[#C6A87C]"
+                        />
                       </FormControl>
-                      <FormLabel className="text-muted-foreground font-normal">Lembrar-me</FormLabel>
+                      <FormLabel className="text-sm font-normal text-stone-500 cursor-pointer">
+                        Lembrar-me
+                      </FormLabel>
                     </FormItem>
                   )}
                 />
-              <a href="#" className="text-primary hover:underline">
-                Esqueceu a senha?
-              </a>
-            </div>
+              </div>
 
-            <Button type="submit" className="w-full" disabled={isSubmitting}>
-              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {isSubmitting ? "Entrando..." : "Entrar"}
-            </Button>
-          </form>
-        </Form>
+              {/* Botão Dourado igual ao do Agendamento */}
+              <Button 
+                type="submit" 
+                className="w-full bg-[#C6A87C] hover:bg-[#B08D55] text-white font-bold tracking-wider h-11 mt-4 transition-all duration-300 shadow-md hover:shadow-lg" 
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ACESSANDO...
+                  </>
+                ) : (
+                  "ENTRAR NO SISTEMA"
+                )}
+              </Button>
+            </form>
+          </Form>
+        </CardContent>
       </Card>
+      
+      <div className="absolute bottom-6 text-xs text-stone-400 font-medium tracking-wide">
+        &copy; 2025 CHEIAS DE CHARME
+      </div>
     </div>
   );
 }

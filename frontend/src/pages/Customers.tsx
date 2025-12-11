@@ -1,6 +1,18 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Plus, Trash2, Users, TrendingUp, Award, X, Gem, Phone, Bot, User, Calendar as CalendarIcon } from "lucide-react";
+import { 
+  Search, 
+  Plus, 
+  Users, 
+  Award, 
+  Gem, 
+  Phone, 
+  Calendar as CalendarIcon, 
+  MoreHorizontal,
+  Edit,
+  Filter,
+  Trash2
+} from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,12 +22,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
-import { customersAPI, referralsAPI } from "@/services/api";
-import { format } from 'date-fns';
+import { customersAPI } from "@/services/api";
+import { format, parseISO } from 'date-fns';
 
-// --- Tipagem de Dados ---
-
+// --- INTERFACES ---
 interface Customer { 
     id: string; 
     full_name: string; 
@@ -25,524 +37,422 @@ interface Customer {
     notes?: string; 
     visits: number; 
     category: "novo" | "recorrente" | "fidelizado"; 
-    last_appointment_status: "confirmed" | "completed" | "cancelled" | "pending"; 
-    points?: number; 
-    referrals?: number; 
-    chat_status?: string; 
+    last_appointment_status: "confirmed" | "completed" | "cancelled" | "pending";
+    last_visit?: string; 
+    points: number; 
 }
-interface Referral { id: string; referrer_customer: string; referrer_customer_name: string; referred_customer: string; referred_customer_name: string; status: 'pending' | 'completed' | 'reward_used'; created_at: string; }
-
-const ALL_FILTER = "all";
-
-// --- Componente: Modal de Edição de Cliente ---
-
-interface CustomerEditModalProps {
-    customer: Partial<Customer> | null;
-    onClose: () => void;
-    onSave: (customerData: Partial<Customer>) => void;
-    isSaving: boolean;
-}
-
-function CustomerEditModal({ customer, onClose, onSave, isSaving }: CustomerEditModalProps) {
-    const isNew = !customer?.id;
-    const [formData, setFormData] = useState({
-        full_name: '',
-        whatsapp: '',
-        email: '',
-        birth_date: '',
-        notes: '',
-        chat_status: 'Atendimento Robo',
-    });
-
-    useEffect(() => {
-        if (customer) {
-            setFormData({
-                full_name: customer.full_name || '',
-                whatsapp: customer.whatsapp || '',
-                email: customer.email || '',
-                birth_date: customer.birth_date || '',
-                notes: customer.notes || '',
-                chat_status: customer.chat_status || 'Atendimento Robo',
-            });
-        }
-    }, [customer]);
-
-    if (!customer) return null;
-
-    const handleSave = () => {
-        const dataToSend = {
-            ...formData,
-            birth_date: formData.birth_date === '' ? null : formData.birth_date,
-        };
-        onSave({ ...customer, ...dataToSend });
-    };
-
-    return (
-        <Dialog open={!!customer} onOpenChange={onClose}>
-            <DialogContent className="sm:max-w-[500px]">
-                <DialogHeader>
-                    <DialogTitle>{isNew ? 'Novo Cliente' : 'Editar Cliente'}</DialogTitle>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                    <div className="space-y-2">
-                        <Label htmlFor="full_name">Nome Completo</Label>
-                        <Input id="full_name" value={formData.full_name} onChange={(e) => setFormData(f => ({...f, full_name: e.target.value}))} />
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <Label htmlFor="whatsapp">WhatsApp</Label>
-                            <Input id="whatsapp" value={formData.whatsapp} onChange={(e) => setFormData(f => ({...f, whatsapp: e.target.value}))} />
-                        </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="email">Email</Label>
-                            <Input id="email" type="email" value={formData.email} onChange={(e) => setFormData(f => ({...f, email: e.target.value}))} />
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                             <Label htmlFor="birth_date">Data de Nascimento</Label>
-                             <Input id="birth_date" type="date" value={formData.birth_date || ''} onChange={(e) => setFormData(f => ({...f, birth_date: e.target.value}))} />
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Status do WhatsApp</Label>
-                             <Select value={formData.chat_status} onValueChange={(value) => setFormData(f => ({...f, chat_status: value}))}>
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="Atendimento Robo">Atendimento Robo</SelectItem>
-                                    <SelectItem value="Atendimento Humano">Atendimento Humano</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
-                    <div className="space-y-2">
-                        <Label htmlFor="notes">Observações</Label>
-                        <Textarea id="notes" value={formData.notes} onChange={(e) => setFormData(f => ({...f, notes: e.target.value}))}/>
-                    </div>
-                </div>
-                <DialogFooter>
-                    <Button variant="outline" onClick={onClose} disabled={isSaving}>Cancelar</Button>
-                    <Button onClick={handleSave} disabled={isSaving}>
-                        {isSaving ? "Salvando..." : "Salvar"}
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-// --- Componente: Modal de Ajuste de Pontos ---
-
-interface PointsAdjustModalProps {
-    customer: Customer | null;
-    onClose: () => void;
-    onSave: (payload: { customerId: string, points: number }) => void;
-    isSaving: boolean;
-}
-
-function PointsAdjustModal({ customer, onClose, onSave, isSaving }: PointsAdjustModalProps) {
-    const [points, setPoints] = useState(0);
-
-    useEffect(() => {
-        setPoints(0);
-    }, [customer]);
-
-    if (!customer) return null;
-
-    const handleAdjust = (action: 'add' | 'remove') => {
-        if (points === 0) {
-            toast.info("Por favor, insira uma quantidade de pontos.");
-            return;
-        }
-
-        const pointsToAdjust = action === 'add' ? points : -points;
-        onSave({ customerId: customer.id, points: pointsToAdjust });
-    };
-
-    return (
-        <Dialog open={!!customer} onOpenChange={onClose}>
-            <DialogContent>
-                <DialogHeader>
-                    <DialogTitle>Ajustar Pontos de {customer.full_name}</DialogTitle>
-                </DialogHeader>
-                <div className="py-4 space-y-4">
-                    <p>Saldo Atual: <strong className="text-primary">{customer.points ?? 0} pontos</strong></p>
-                    <div className="space-y-2">
-                        <Label htmlFor="points-adjust">Quantidade</Label>
-                        <Input 
-                            id="points-adjust"
-                            type="number"
-                            placeholder="Ex: 50"
-                            value={points}
-                            onChange={(e) => setPoints(Math.abs(parseInt(e.target.value, 10) || 0))}
-                        />
-                    </div>
-                </div>
-                <DialogFooter className="gap-2">
-                    <Button variant="outline" onClick={onClose}>Cancelar</Button>
-                    <Button variant="destructive" onClick={() => handleAdjust('remove')} disabled={isSaving}>
-                        Remover Pontos
-                    </Button>
-                    <Button onClick={() => handleAdjust('add')} disabled={isSaving}>
-                        Adicionar Pontos
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
-    );
-}
-
-// --- Componente Principal da Página ---
 
 export default function Customers() {
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState("");
-  const [editingCustomer, setEditingCustomer] = useState<Partial<Customer> | null>(null);
-  const [adjustingPointsCustomer, setAdjustingPointsCustomer] = useState<Customer | null>(null);
-  const [activeTab, setActiveTab] = useState("customers");
-  const [funnelFilter, setFunnelFilter] = useState<string | null>(null);
-  const [categoryListFilter, setCategoryListFilter] = useState<string>(ALL_FILTER);
-  const [chatStatusFilter, setChatStatusFilter] = useState<string>(ALL_FILTER);
-  const [referrerId, setReferrerId] = useState<string>('');
-
-  const { data: rawCustomers, isLoading: isLoadingCustomers } = useQuery<any[]>({
-    queryKey: ['customers'],
-    queryFn: customersAPI.getAll,
-  });
+  const [searchTerm, setSearchTerm] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [activeTab, setActiveTab] = useState("list");
   
-  const { data: referrals = [], isLoading: isLoadingReferrals } = useQuery<Referral[]>({
-    queryKey: ['referrals'],
-    queryFn: referralsAPI.getAll,
+  // Estados dos Modais
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [isPointsModalOpen, setIsPointsModalOpen] = useState(false);
+  const [adjustingPointsCustomer, setAdjustingPointsCustomer] = useState<Customer | null>(null);
+  const [pointsAdjustment, setPointsAdjustment] = useState(0);
+
+  // Formulário Cliente
+  const [formData, setFormData] = useState({
+    full_name: "", whatsapp: "", email: "", birth_date: "", notes: "", category: "novo"
   });
 
-  const customers = useMemo<Customer[]>(() => {
-    if (!Array.isArray(rawCustomers)) return [];
-    return rawCustomers.map(c => ({
-      ...c,
-      visits: c.visits || 0,
-      category: c.category || 'novo',
-      last_appointment_status: c.last_appointment_status || 'pending',
-      chat_status: c.chat_status || 'Atendimento Robo',
-    }));
-  }, [rawCustomers]);
-
-  const saveCustomerMutation = useMutation({
-      mutationFn: (customerData: Partial<Customer>) => {
-          const { id, ...data } = customerData;
-          delete (data as any).visits;
-          delete (data as any).category;
-          delete (data as any).last_appointment_status;
-          return id ? customersAPI.update(id, data) : customersAPI.create(data);
-      },
-      onSuccess: (newCustomerData, variables) => {
-          const isNew = !variables.id;
-          if (isNew && referrerId && (newCustomerData as Customer).id) {
-              createReferralMutation.mutate({
-                  referrer_customer: referrerId,
-                  referred_customer: (newCustomerData as Customer).id,
-              });
-          } else {
-              toast.success(`Cliente salvo com sucesso!`);
-          }
-          setEditingCustomer(null);
-          queryClient.invalidateQueries({ queryKey: ['customers'] });
-      },
-      onError: (error: any) => toast.error(error.message || "Ocorreu um erro ao salvar."),
+  // --- QUERIES ---
+  const { data: customers = [], isLoading } = useQuery<Customer[]>({ 
+    queryKey: ['customers'], 
+    queryFn: customersAPI.getAll 
   });
 
-  const createReferralMutation = useMutation({
-    mutationFn: (referralData: { referrer_customer: string, referred_customer: string }) => referralsAPI.create(referralData),
-    onSuccess: () => {
-      toast.success("Nova indicação registrada com sucesso!");
-      setReferrerId(''); 
-      queryClient.invalidateQueries({ queryKey: ['referrals'] });
-    },
-    onError: (error: any) => toast.error(error.message || "Falha ao registrar indicação."),
-  });
-
-  const deleteCustomerMutation = useMutation({
-    mutationFn: (customerId: string) => customersAPI.delete(customerId),
-    onSuccess: () => {
-        toast.success("Cliente excluído com sucesso!");
-        queryClient.invalidateQueries({ queryKey: ['customers'] });
-    },
-    onError: (error: any) => toast.error(error.message || `Falha ao excluir.`),
-  });
-
-  const adjustPointsMutation = useMutation({
-    mutationFn: ({ customerId, points }: { customerId: string, points: number }) => 
-        customersAPI.adjustPoints(customerId, { points_to_adjust: points }),
-    onSuccess: () => {
-        toast.success("Pontos ajustados com sucesso!");
-        setAdjustingPointsCustomer(null);
-        queryClient.invalidateQueries({ queryKey: ['customers'] });
-    },
-    onError: (error: any) => toast.error(error.message || "Falha ao ajustar pontos."),
-  });
+  // --- PROCESSAMENTO ---
+  const filteredCustomers = useMemo(() => {
+    return customers.filter(c => {
+      const matchesSearch = c.full_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            c.whatsapp.includes(searchTerm);
+      const matchesCategory = categoryFilter === "all" || c.category === categoryFilter;
+      
+      return matchesSearch && matchesCategory;
+    });
+  }, [customers, searchTerm, categoryFilter]);
 
   const loyaltyRanking = useMemo(() => {
-    return [...customers].sort((a, b) => (b.points ?? 0) - (a.points ?? 0));
+    return [...customers].sort((a, b) => (b.points || 0) - (a.points || 0)).slice(0, 10);
   }, [customers]);
 
-  const filteredCustomers = useMemo(() => {
-    let results = customers;
-    if (funnelFilter) {
-      results = results.filter(c => c.category === funnelFilter);
-    }
-    if (categoryListFilter !== ALL_FILTER) {
-      results = results.filter(c => c.category === categoryListFilter);
-    }
-    if (chatStatusFilter !== ALL_FILTER) {
-      results = results.filter(c => c.chat_status === chatStatusFilter);
-    }
-    if (search) {
-      results = results.filter(c => (c.full_name || "").toLowerCase().includes(search.toLowerCase()) || (c.whatsapp || "").includes(search));
-    }
-    return results;
-  }, [customers, search, funnelFilter, categoryListFilter, chatStatusFilter]);
+  // --- MUTATIONS ---
+  const createMutation = useMutation({
+    mutationFn: customersAPI.create,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      setIsCustomerModalOpen(false);
+      toast.success("Cliente cadastrado com sucesso!");
+    },
+    onError: () => toast.error("Erro ao cadastrar cliente.")
+  });
 
-  const crmData = useMemo(() => {
-    const newCustomers = customers.filter(c => c.category === "novo");
-    const recurringCustomers = customers.filter(c => c.category === "recorrente");
-    const loyalCustomers = customers.filter(c => c.category === "fidelizado");
-    return { newCount: newCustomers.length, recurringCount: recurringCustomers.length, loyalCount: loyalCustomers.length };
-  }, [customers]);
-  
-  const handleOpenNewReferredModal = () => {
-    if (!referrerId) {
-      toast.warning("Por favor, selecione quem está indicando primeiro.");
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: any) => customersAPI.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      setIsCustomerModalOpen(false);
+      setEditingCustomer(null);
+      toast.success("Cliente atualizado!");
+    },
+    onError: () => toast.error("Erro ao atualizar.")
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: customersAPI.delete,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      toast.success("Cliente removido.");
+    },
+    onError: () => toast.error("Erro ao remover.")
+  });
+
+  const updatePointsMutation = useMutation({
+    mutationFn: ({ id, points }: { id: string, points: number }) => customersAPI.update(id, { points }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      setIsPointsModalOpen(false);
+      setAdjustingPointsCustomer(null);
+      setPointsAdjustment(0);
+      toast.success("Pontos atualizados!");
+    },
+    onError: () => toast.error("Erro ao atualizar pontos.")
+  });
+
+  // --- HANDLERS ---
+  const handleOpenNew = () => {
+    setEditingCustomer(null);
+    setFormData({ full_name: "", whatsapp: "", email: "", birth_date: "", notes: "", category: "novo" });
+    setIsCustomerModalOpen(true);
+  };
+
+  const handleOpenEdit = (customer: Customer) => {
+    setEditingCustomer(customer);
+    setFormData({
+      full_name: customer.full_name,
+      whatsapp: customer.whatsapp,
+      email: customer.email || "",
+      birth_date: customer.birth_date || "",
+      notes: customer.notes || "",
+      category: customer.category || "novo"
+    });
+    setIsCustomerModalOpen(true);
+  };
+
+  const handleSaveCustomer = () => {
+    if (!formData.full_name || !formData.whatsapp) {
+      toast.warning("Nome e WhatsApp são obrigatórios.");
       return;
     }
-    setEditingCustomer({});
-  };
-  
-  const handleDeleteCustomer = (customer: Customer) => {
-    if (window.confirm(`Tem certeza que deseja excluir "${customer.full_name}"?`)) {
-        deleteCustomerMutation.mutate(customer.id);
+    
+    if (editingCustomer) {
+      updateMutation.mutate({ id: editingCustomer.id, data: formData });
+    } else {
+      createMutation.mutate(formData);
     }
-  }
-
-  const handleFunnelClick = (category: string) => {
-    setFunnelFilter(category);
-    setActiveTab("customers");
-  };
-  
-  const clearAllFilters = () => {
-    setSearch("");
-    setFunnelFilter(null);
-    setCategoryListFilter(ALL_FILTER);
-    setChatStatusFilter(ALL_FILTER);
   };
 
-  const handleOpenNewModal = () => setEditingCustomer({});
+  const handleOpenPoints = (customer: Customer) => {
+    setAdjustingPointsCustomer(customer);
+    setPointsAdjustment(customer.points || 0);
+    setIsPointsModalOpen(true);
+  };
 
-  const capitalize = (s: string) => s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
+  const handleSavePoints = () => {
+    if (adjustingPointsCustomer) {
+      updatePointsMutation.mutate({ id: adjustingPointsCustomer.id, points: pointsAdjustment });
+    }
+  };
 
-  const categoryColors: Record<string, string> = { novo: "bg-chart-2", recorrente: "bg-chart-3", fidelizado: "bg-chart-1" };
+  // --- RENDERIZADORES ---
+  const renderCategoryBadge = (category: string) => {
+    switch (category) {
+      case "fidelizado": return <Badge className="bg-[#C6A87C] hover:bg-[#B08D55]">Fidelizado</Badge>;
+      case "recorrente": return <Badge className="bg-blue-500 hover:bg-blue-600">Recorrente</Badge>;
+      default: return <Badge variant="outline" className="text-stone-500">Novo</Badge>;
+    }
+  };
 
   return (
-    <div className="p-6 space-y-6">
-      <CustomerEditModal customer={editingCustomer} onClose={() => setEditingCustomer(null)} onSave={saveCustomerMutation.mutate} isSaving={saveCustomerMutation.isPending}/>
-      <PointsAdjustModal customer={adjustingPointsCustomer} onClose={() => setAdjustingPointsCustomer(null)} onSave={adjustPointsMutation.mutate} isSaving={adjustPointsMutation.isPending}/>
-
-      <div className="flex items-center justify-between gap-4">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-500 bg-stone-50/50 dark:bg-stone-950 min-h-screen font-sans">
+      
+      {/* CABEÇALHO */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-semibold text-foreground mb-2">Clientes</h1>
-          <p className="text-muted-foreground">CRM e gestão de relacionamento</p>
+          <h1 className="text-2xl font-bold text-stone-800 dark:text-stone-100 tracking-tight flex items-center gap-3">
+            <div className="p-2 bg-white dark:bg-stone-900 rounded-lg shadow-sm border border-stone-100 dark:border-stone-800">
+               <Users className="w-5 h-5 text-[#C6A87C]" />
+            </div>
+            Clientes
+          </h1>
+          <p className="text-stone-500 dark:text-stone-400 text-sm mt-1 ml-1">
+            Base de contatos e fidelidade.
+          </p>
         </div>
-        <Button onClick={handleOpenNewModal}><Plus className="w-4 h-4 mr-2" />Novo Cliente</Button>
+        <Button onClick={handleOpenNew} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white shadow-md font-medium px-6 w-full md:w-auto">
+          <Plus className="w-4 h-4 mr-2" /> Novo Cliente
+        </Button>
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="customers">Clientes</TabsTrigger>
-            <TabsTrigger value="funnel">Funil CRM</TabsTrigger>
-            <TabsTrigger value="referrals">Indicações</TabsTrigger>
-            <TabsTrigger value="loyalty">Programa de Pontos</TabsTrigger>
-            <TabsTrigger value="automation">Automação</TabsTrigger>
-        </TabsList>
+      {/* TABS E FILTROS */}
+      <Tabs defaultValue="list" className="space-y-6" onValueChange={setActiveTab}>
+        <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4">
+          <TabsList className="bg-white dark:bg-stone-900 border border-stone-100 dark:border-stone-800 p-1 rounded-xl h-auto w-full xl:w-auto grid grid-cols-2 xl:flex">
+            <TabsTrigger value="list" className="rounded-lg data-[state=active]:bg-[#C6A87C] data-[state=active]:text-white">
+               <Users className="w-4 h-4 mr-2" /> Lista
+            </TabsTrigger>
+            <TabsTrigger value="ranking" className="rounded-lg data-[state=active]:bg-[#C6A87C] data-[state=active]:text-white">
+               <Award className="w-4 h-4 mr-2" /> Ranking
+            </TabsTrigger>
+          </TabsList>
 
-        <TabsContent value="customers" className="space-y-6">
-          {funnelFilter && (
-            <Card className="p-3 bg-muted">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-foreground">
-                  Mostrando apenas clientes da categoria: <strong className="capitalize">{funnelFilter}</strong>
-                </p>
-                <Button variant="ghost" size="sm" onClick={() => setFunnelFilter(null)}>
-                  <X className="w-4 h-4 mr-2" />
-                  Limpar Filtro do Funil
-                </Button>
-              </div>
-            </Card>
-          )}
-          
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input type="search" placeholder="Buscar por nome ou WhatsApp..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10"/>
-            </div>
-            <Select value={categoryListFilter} onValueChange={setCategoryListFilter}>
-              <SelectTrigger className="w-48"><SelectValue placeholder="Filtrar por Categoria" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_FILTER}>Categorias</SelectItem>
-                <SelectItem value="novo">Novo</SelectItem>
-                <SelectItem value="recorrente">Recorrente</SelectItem>
-                <SelectItem value="fidelizado">Fidelizado</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={chatStatusFilter} onValueChange={setChatStatusFilter}>
-              <SelectTrigger className="w-52"><SelectValue placeholder="Filtrar por Status do Chat" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_FILTER}>Status de Chat</SelectItem>
-                <SelectItem value="Atendimento Robo">Atendimento Robo</SelectItem>
-                <SelectItem value="Atendimento Humano">Atendimento Humano</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button variant="ghost" onClick={clearAllFilters}>Limpar Filtros</Button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {isLoadingCustomers ? <p className="col-span-full text-center p-6 text-muted-foreground">Carregando...</p> : filteredCustomers.length > 0 ? (
-              filteredCustomers.map((customer) => (
-                <Card key={customer.id} className="flex flex-col">
-                  <CardHeader className="flex flex-row items-start justify-between pb-4">
-                    <div>
-                      <CardTitle className="text-lg">{customer.full_name}</CardTitle>
-                      {customer.category && <Badge className={`${categoryColors[customer.category]} text-white text-xs`}>{capitalize(customer.category)}</Badge>}
-                    </div>
-                    <div className="flex gap-1">
-                      <Button size="sm" variant="outline" onClick={() => setEditingCustomer(customer)}>Editar</Button>
-                      <Button size="icon" variant="ghost" onClick={() => handleDeleteCustomer(customer)} className="text-destructive hover:text-destructive hover:bg-destructive/10"><Trash2 className="w-4 h-4" /></Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm text-muted-foreground flex-1">
-                    <div className="flex items-center gap-2"><Phone className="w-4 h-4" /> <span>{customer.whatsapp}</span></div>
-                    {customer.chat_status === 'Atendimento Robo' ? (
-                        <div className="flex items-center gap-2"><Bot className="w-4 h-4" /> <span>{customer.chat_status}</span></div>
-                    ) : (
-                        <div className="flex items-center gap-2"><User className="w-4 h-4" /> <span>{customer.chat_status}</span></div>
-                    )}
-                    <div className="flex items-center gap-2"><CalendarIcon className="w-4 h-4" /> <span>{customer.visits ?? 0} visitas</span></div>
-                    <div className="flex items-center gap-2"><Gem className="w-4 h-4" /> <span>{customer.points ?? 0} pontos</span></div>
-                  </CardContent>
-                </Card>
-              ))
-            ) : <p className="col-span-full text-center p-6 text-muted-foreground">Nenhum cliente encontrado com os filtros aplicados.</p>}
-          </div>
-        </TabsContent>
-        
-        <TabsContent value="funnel" className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <Card onClick={() => handleFunnelClick('novo')} className="cursor-pointer hover:border-primary transition-colors">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Clientes Novos</CardTitle>
-                        <Users className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{crmData.newCount}</div>
-                        <p className="text-xs text-muted-foreground">Clientes na 1ª visita</p>
-                    </CardContent>
-                </Card>
-                <Card onClick={() => handleFunnelClick('recorrente')} className="cursor-pointer hover:border-primary transition-colors">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Clientes Recorrentes</CardTitle>
-                        <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{crmData.recurringCount}</div>
-                        <p className="text-xs text-muted-foreground">Clientes com 2 a 4 visitas</p>
-                    </CardContent>
-                </Card>
-                <Card onClick={() => handleFunnelClick('fidelizado')} className="cursor-pointer hover:border-primary transition-colors">
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Clientes Fidelizados</CardTitle>
-                        <Award className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{crmData.loyalCount}</div>
-                        <p className="text-xs text-muted-foreground">Clientes com 5+ visitas</p>
-                    </CardContent>
-                </Card>
-            </div>
-        </TabsContent>
-
-        <TabsContent value="referrals" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Registrar Nova Indicação</CardTitle>
-            </CardHeader>
-            <CardContent className="flex items-end gap-4">
-              <div className="flex-1 space-y-2">
-                <Label>Quem está indicando? (Indicadora)</Label>
-                <Select value={referrerId} onValueChange={setReferrerId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione uma cliente existente..." />
+          {/* BARRA DE FILTROS */}
+          <div className="flex flex-col sm:flex-row gap-2 w-full xl:w-auto">
+            
+            {/* Filtro de Categoria */}
+            <div className="relative min-w-[140px]">
+               <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                  <SelectTrigger className="bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 rounded-xl pl-9">
+                     <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-stone-400" />
+                     <SelectValue placeholder="Categoria" />
                   </SelectTrigger>
                   <SelectContent>
-                    {customers.map(c => <SelectItem key={c.id} value={c.id}>{c.full_name}</SelectItem>)}
+                     <SelectItem value="all">Todos</SelectItem>
+                     <SelectItem value="novo">Novos</SelectItem>
+                     <SelectItem value="recorrente">Recorrentes</SelectItem>
+                     <SelectItem value="fidelizado">Fidelizados</SelectItem>
                   </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={handleOpenNewReferredModal}>
-                <Plus className="w-4 h-4 mr-2" />
-                Indicar Nova Amiga
-              </Button>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>Histórico de Indicações</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {isLoadingReferrals ? <p className="text-muted-foreground text-center p-4">Carregando...</p> : referrals.length > 0 ? (
-                referrals.map(ref => (
-                  <div key={ref.id} className="flex justify-between items-center p-3 border-b last:border-b-0">
-                    <div>
-                      <p className="font-medium">{ref.referrer_customer_name} <span className="text-muted-foreground font-normal">indicou</span> {ref.referred_customer_name}</p>
-                      <p className="text-sm text-muted-foreground">Em: {format(new Date(ref.created_at), 'dd/MM/yyyy')}</p>
+               </Select>
+            </div>
+
+            {/* Busca */}
+            <div className="relative w-full sm:w-72">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-stone-400" />
+              <Input 
+                placeholder="Buscar por nome ou whats..." 
+                className="pl-9 bg-white dark:bg-stone-900 border-stone-200 dark:border-stone-800 rounded-xl focus:ring-[#C6A87C]/20"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* --- LISTA DE CLIENTES --- */}
+        <TabsContent value="list" className="mt-0">
+          {isLoading ? (
+             <div className="flex flex-col items-center justify-center py-20 gap-3">
+               <div className="w-8 h-8 border-4 border-[#C6A87C]/30 border-t-[#C6A87C] rounded-full animate-spin"></div>
+               <p className="text-stone-400 text-sm">Carregando clientes...</p>
+             </div>
+          ) : filteredCustomers.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {filteredCustomers.map((customer) => (
+                <Card key={customer.id} className="group border-stone-100 dark:border-stone-800 shadow-sm hover:shadow-md transition-all bg-white dark:bg-stone-900 overflow-hidden">
+                  <CardContent className="p-5">
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-stone-100 dark:bg-stone-800 flex items-center justify-center text-stone-500 font-bold text-lg border border-stone-200 dark:border-stone-700">
+                          {customer.full_name.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-stone-800 dark:text-stone-100 line-clamp-1">{customer.full_name}</h3>
+                          <p className="text-xs text-stone-400 flex items-center gap-1">
+                             <Phone className="w-3 h-3" /> {customer.whatsapp}
+                          </p>
+                        </div>
+                      </div>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-stone-400 hover:text-[#C6A87C]">
+                            <MoreHorizontal className="w-4 h-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-40">
+                          <DropdownMenuItem onClick={() => handleOpenEdit(customer)}>
+                             <Edit className="w-4 h-4 mr-2" /> Editar
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleOpenPoints(customer)}>
+                             <Gem className="w-4 h-4 mr-2" /> Pontos
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { if(confirm("Excluir cliente?")) deleteMutation.mutate(customer.id) }} className="text-red-500 focus:text-red-600">
+                             <Trash2 className="w-4 h-4 mr-2" /> Excluir
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
-                    <Badge variant={ref.status === 'completed' ? 'default' : 'secondary'}>
-                      {ref.status === 'pending' && 'Pendente'}
-                      {ref.status === 'completed' && 'Recompensa Liberada'}
-                      {ref.status === 'reward_used' && 'Recompensa Utilizada'}
-                    </Badge>
-                  </div>
-                ))
-              ) : <p className="text-muted-foreground text-center p-4">Nenhuma indicação registrada ainda.</p>}
-            </CardContent>
-          </Card>
+
+                    <div className="grid grid-cols-2 gap-2 text-sm mt-4 pt-4 border-t border-stone-50 dark:border-stone-800">
+                       <div className="bg-stone-50 dark:bg-stone-950 p-2 rounded-lg flex flex-col items-center justify-center border border-stone-100 dark:border-stone-800">
+                          <span className="text-[10px] text-stone-400 uppercase tracking-wide font-semibold">Visitas</span>
+                          <span className="font-bold text-stone-700 dark:text-stone-200">{customer.visits}</span>
+                       </div>
+                       <div className="bg-[#C6A87C]/5 p-2 rounded-lg flex flex-col items-center justify-center border border-[#C6A87C]/20">
+                          <span className="text-[10px] text-[#C6A87C] uppercase tracking-wide font-semibold">Pontos</span>
+                          <span className="font-bold text-[#C6A87C] flex items-center gap-1">
+                             <Gem className="w-3 h-3" /> {customer.points || 0}
+                          </span>
+                       </div>
+                    </div>
+                    
+                    <div className="mt-3 flex justify-between items-center">
+                       {renderCategoryBadge(customer.category)}
+                       {customer.last_visit && (
+                         <span className="text-[10px] text-stone-400 flex items-center gap-1 bg-stone-50 dark:bg-stone-800 px-2 py-1 rounded-full">
+                           <CalendarIcon className="w-3 h-3" /> 
+                           {format(parseISO(customer.last_visit), "dd/MM/yy")}
+                         </span>
+                       )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-16 text-center text-stone-400 bg-white dark:bg-stone-900 rounded-xl border border-dashed border-stone-200 dark:border-stone-800">
+               <Users className="w-12 h-12 mb-4 opacity-20" />
+               <p>Nenhum cliente encontrado.</p>
+               {searchTerm || categoryFilter !== 'all' ? (
+                 // 👇 CORREÇÃO: variant="ghost" em vez de "link"
+                 <Button variant="ghost" onClick={() => { setSearchTerm(""); setCategoryFilter("all"); }} className="text-[#C6A87C] hover:text-[#B08D55] hover:bg-stone-50 mt-2">
+                   Limpar filtros
+                 </Button>
+               ) : null}
+            </div>
+          )}
         </TabsContent>
 
-        <TabsContent value="loyalty" className="space-y-6">
-          <Card>
+        {/* --- RANKING DE FIDELIDADE --- */}
+        <TabsContent value="ranking">
+          <Card className="border-stone-100 dark:border-stone-800 shadow-sm bg-white dark:bg-stone-900">
             <CardHeader>
-              <CardTitle>Ranking de Fidelidade</CardTitle>
+              <CardTitle className="flex items-center gap-2 text-stone-800 dark:text-stone-100">
+                 <Award className="w-5 h-5 text-[#C6A87C]" />
+                 Top 10 Clientes Fiéis
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              {isLoadingCustomers ? <p className="text-center text-muted-foreground p-4">Carregando...</p> : loyaltyRanking.length > 0 ? (
-                loyaltyRanking.map((customer, index) => (
-                  <div key={customer.id} className="flex items-center justify-between p-3 border-b last:border-b-0">
-                    <div className="flex items-center gap-4">
-                      <span className="font-bold text-lg text-primary w-8 text-center">{index + 1}º</span>
-                      <div>
-                        <p className="font-medium">{customer.full_name}</p>
-                        <p className="text-sm text-muted-foreground flex items-center gap-1">
-                          <Gem className="w-3 h-3 text-amber-500" /> {customer.points ?? 0} pontos
-                        </p>
+              {loyaltyRanking.length > 0 ? (
+                <div className="space-y-2">
+                  {loyaltyRanking.map((customer, index) => (
+                    <div key={customer.id} className="flex items-center justify-between p-3 rounded-xl hover:bg-stone-50 dark:hover:bg-stone-800/50 transition-colors border border-transparent hover:border-stone-100 dark:hover:border-stone-800">
+                      <div className="flex items-center gap-4">
+                        <div className={`
+                           w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm shadow-sm
+                           ${index === 0 ? "bg-yellow-100 text-yellow-700 border border-yellow-200" : 
+                             index === 1 ? "bg-stone-200 text-stone-700 border border-stone-300" : 
+                             index === 2 ? "bg-orange-100 text-orange-700 border border-orange-200" : "bg-stone-50 text-stone-400 border border-stone-100"}
+                        `}>
+                           {index + 1}º
+                        </div>
+                        <div>
+                          <p className="font-bold text-stone-700 dark:text-stone-200 text-sm">{customer.full_name}</p>
+                          <p className="text-xs text-stone-400 capitalize">{customer.category}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                         <div className="px-3 py-1 bg-[#C6A87C]/10 rounded-full text-[#C6A87C] text-xs font-bold flex items-center gap-1 border border-[#C6A87C]/20">
+                            <Gem className="w-3 h-3" /> {customer.points}
+                         </div>
+                         <Button variant="ghost" size="icon" onClick={() => handleOpenPoints(customer)} className="h-8 w-8">
+                            <Edit className="w-4 h-4 text-stone-400 hover:text-[#C6A87C]" />
+                         </Button>
                       </div>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => setAdjustingPointsCustomer(customer)}>Ajustar Pontos</Button>
-                  </div>
-                ))
-              ) : <p className="text-center text-muted-foreground p-4">Nenhum cliente com pontos.</p>}
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-10">
+                   <Award className="w-12 h-12 mx-auto text-stone-200 mb-2" />
+                   <p className="text-stone-400">Ainda não há pontuações registradas.</p>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
-
-        <TabsContent value="automation"><p className="text-muted-foreground">Em desenvolvimento.</p></TabsContent>
       </Tabs>
+
+      {/* --- MODAL NOVO/EDITAR CLIENTE --- */}
+      <Dialog open={isCustomerModalOpen} onOpenChange={setIsCustomerModalOpen}>
+        <DialogContent className="sm:max-w-[500px] bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800">
+          <DialogHeader>
+            <DialogTitle className="text-stone-800 dark:text-stone-100">
+               {editingCustomer ? "Editar Cliente" : "Novo Cliente"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-stone-500 uppercase">Nome Completo</Label>
+              <Input className="bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800" value={formData.full_name} onChange={e => setFormData({...formData, full_name: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold text-stone-500 uppercase">WhatsApp</Label>
+                  <Input className="bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800" placeholder="(11) 9..." value={formData.whatsapp} onChange={e => setFormData({...formData, whatsapp: e.target.value})} />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold text-stone-500 uppercase">Nascimento</Label>
+                  <Input type="date" className="bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800" value={formData.birth_date} onChange={e => setFormData({...formData, birth_date: e.target.value})} />
+                </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-stone-500 uppercase">Email (Opcional)</Label>
+              <Input className="bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800" type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-stone-500 uppercase">Categoria</Label>
+              <Select value={formData.category} onValueChange={(val: any) => setFormData({...formData, category: val})}>
+                <SelectTrigger className="bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="novo">Novo</SelectItem>
+                  <SelectItem value="recorrente">Recorrente</SelectItem>
+                  <SelectItem value="fidelizado">Fidelizado</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-semibold text-stone-500 uppercase">Observações</Label>
+              <Textarea className="bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800 resize-none h-20" value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsCustomerModalOpen(false)} className="dark:text-stone-300">Cancelar</Button>
+            <Button onClick={handleSaveCustomer} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white font-bold">Salvar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* --- MODAL AJUSTAR PONTOS --- */}
+      <Dialog open={isPointsModalOpen} onOpenChange={setIsPointsModalOpen}>
+        <DialogContent className="sm:max-w-sm bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-stone-800 dark:text-stone-100">
+               <Gem className="w-5 h-5 text-[#C6A87C]" /> Ajustar Pontos
+            </DialogTitle>
+          </DialogHeader>
+          <div className="py-6 text-center">
+             <div className="text-5xl font-bold text-[#C6A87C] mb-2 font-mono tracking-tighter">{pointsAdjustment}</div>
+             <p className="text-sm text-stone-400 mb-6 uppercase tracking-wide font-medium">Saldo atual</p>
+             
+             <div className="flex justify-center gap-3">
+                <Button variant="outline" size="icon" onClick={() => setPointsAdjustment(p => p - 10)} className="h-10 w-10 rounded-full border-stone-200 text-stone-500 hover:text-red-500 hover:border-red-200 font-bold">-10</Button>
+                <Button variant="outline" size="icon" onClick={() => setPointsAdjustment(p => p - 1)} className="h-10 w-10 rounded-full border-stone-200 text-stone-500 hover:text-red-500 hover:border-red-200 font-bold">-1</Button>
+                <Button variant="outline" size="icon" onClick={() => setPointsAdjustment(p => p + 1)} className="h-10 w-10 rounded-full border-stone-200 text-stone-500 hover:text-emerald-500 hover:border-emerald-200 font-bold">+1</Button>
+                <Button variant="outline" size="icon" onClick={() => setPointsAdjustment(p => p + 10)} className="h-10 w-10 rounded-full border-stone-200 text-stone-500 hover:text-emerald-500 hover:border-emerald-200 font-bold">+10</Button>
+             </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsPointsModalOpen(false)} className="dark:text-stone-300">Cancelar</Button>
+            <Button onClick={handleSavePoints} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white font-bold">Confirmar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
     </div>
   );
 }

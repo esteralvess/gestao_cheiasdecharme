@@ -1,8 +1,13 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, List, Calendar as CalendarIcon, X, Trash2, Gift, Sparkles, Gem } from "lucide-react";
+import { 
+  Plus, 
+  List, 
+  Calendar as CalendarIcon, 
+  Trash2, 
+  Clock,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -10,621 +15,519 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import AppointmentCard from "@/components/AppointmentCard";
 import CalendarView from "@/components/CalendarView";
 import { PaymentConfirmationModal } from "@/components/PaymentConfirmationModal";
-import { format, parseISO, setHours, setMinutes, setSeconds, addMinutes } from "date-fns";
+import { format, parseISO, setHours, setMinutes, isSameDay } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
-import { appointmentsAPI, customersAPI, staffAPI, servicesAPI, locationsAPI, staffServicesAPI, staffShiftsAPI, referralsAPI } from "@/services/api";
+import { appointmentsAPI, customersAPI, staffAPI, servicesAPI, locationsAPI } from "@/services/api";
 
-// --- INTERFACES E TIPOS ---
+// --- TIPAGEM DO STATUS (CORREÇÃO FUNDAMENTAL) ---
+type AppointmentStatus = "confirmed" | "completed" | "cancelled" | "pending";
 
-interface AppointmentFromAPI { id: string; customer_name: string; staff_name: string; service_name: string; location_name: string; start_time: string; end_time: string; status: 'pending' | 'confirmed' | 'completed' | 'cancelled'; notes?: string; customer: string; staff: string; service: string; location: string; cancelled_at?: string; }
-interface ProcessedAppointment { id: string; customerName: string; staffName: string; serviceName: string; locationName: string; startTime: Date; endTime: Date; status: 'pending' | 'confirmed' | 'completed' | 'cancelled'; notes?: string; customerId: string; staffId: string; serviceId: string; locationId: string; }
-interface Customer { id: string; full_name: string; is_truly_new?: boolean; points?: number; notes?: string; }
-interface Staff { id: string; name: string; }
-interface Service { id: string; name: string; price_centavos?: number; default_duration_min?: number; }
-interface Location { id: string; name: string; }
-interface StaffService { staff_id: string; service_id: string; }
-interface StaffShift { staff_id: string; location_id: string; }
-interface Referral { id: string; referrer_customer: string; status: 'completed'; }
-
-const ALL_FILTER_VALUE = "all";
-
-// 💡 FUNÇÃO DE PARSE CORRIGIDA
-const parseAppointmentDate = (dateString: string): Date => {
-  if (!dateString) return new Date();
-  return parseISO(dateString);
-};
-
-// --- COMPONENTE: MODAL DE EDIÇÃO/CRIAÇÃO DE AGENDAMENTO ---
-
-interface AppointmentEditModalProps {
-  appointment: ProcessedAppointment | null;
-  customers: Customer[]; 
-  staff: Staff[]; 
-  services: Service[]; 
-  locations: Location[]; 
-  staffServices: StaffService[]; 
-  staffShifts: StaffShift[];
-  referrals: Referral[];
-  onClose: () => void; 
-  onSave: (payload: any) => void; 
-  onDelete: (id: string) => void; 
-  isSaving: boolean; 
-  isDeleting: boolean;
+// --- INTERFACES ---
+interface AppointmentFromAPI { 
+  id: string; 
+  customer_name: string; 
+  service_name: string; 
+  staff_name: string; 
+  start_time: string; 
+  end_time: string; 
+  status: AppointmentStatus; // ✅ Usando o tipo específico
+  notes?: string; 
+  customer?: string; 
+  staff?: string; 
+  service?: string; 
+  location?: string; 
+  final_amount_centavos?: number;
+  service_price_centavos?: number;
 }
 
-function AppointmentEditModal({ appointment, customers, staff, services, locations, staffServices, staffShifts, referrals, onClose, onSave, onDelete, isSaving, isDeleting }: AppointmentEditModalProps) {
-  const queryClient = useQueryClient();
-  const isNew = !appointment?.id;
-  const prevServiceIdRef = useRef<string | null>(null);
-
-  const [formData, setFormData] = useState({
-    date: new Date(), startTime: '09:00', endTime: '10:00', customerId: '', staffId: '', serviceId: '', locationId: '', status: 'confirmed' as AppointmentFromAPI['status'], notes: '',
-  });
-
-  const [isRewardApplied, setIsRewardApplied] = useState(false);
-
-  useEffect(() => {
-    if (appointment) {
-      setFormData({
-        date: appointment.startTime, startTime: format(appointment.startTime, 'HH:mm'), endTime: format(appointment.endTime, 'HH:mm'), customerId: appointment.customerId, staffId: appointment.staffId, serviceId: appointment.serviceId, locationId: appointment.locationId, status: appointment.status, notes: appointment.notes || '',
-      });
-      prevServiceIdRef.current = appointment.serviceId;
-      setIsRewardApplied(false);
-    }
-  }, [appointment]);
-
-  const filteredStaff = useMemo(() => {
-    if (!formData.serviceId) return [];
-    const staffIdsForService = new Set(staffServices.filter(ss => ss.service_id === formData.serviceId).map(ss => ss.staff_id));
-    return staff.filter(s => staffIdsForService.has(s.id));
-  }, [formData.serviceId, staff, staffServices]);
-
-  const filteredLocations = useMemo(() => {
-    if (!formData.staffId) return [];
-    const locationIdsForStaff = new Set(staffShifts.filter(shift => shift.staff_id === formData.staffId).map(shift => shift.location_id));
-    return locations.filter(l => locationIdsForStaff.has(l.id));
-  }, [formData.staffId, locations, staffShifts]);
-  
-  const selectedService = useMemo(() => {
-    return services.find(s => s.id === formData.serviceId);
-  }, [formData.serviceId, services]);
-
-  const selectedCustomer = useMemo(() => {
-    return customers.find(c => c.id === formData.customerId);
-  }, [formData.customerId, customers]);
-
-  const availableReward = useMemo(() => {
-    if (!selectedCustomer) return null;
-    return referrals.find(r => r.referrer_customer === selectedCustomer.id && r.status === 'completed');
-  }, [selectedCustomer, referrals]);
-
-  const applyRewardMutation = useMutation({
-    mutationFn: (referralId: string) => referralsAPI.applyReward(referralId),
-    onSuccess: () => {
-      toast.success("Recompensa de 5% aplicada! O status da indicação foi atualizado.");
-      setIsRewardApplied(true);
-      queryClient.invalidateQueries({ queryKey: ['referrals'] });
-    },
-    onError: (error: any) => toast.error(error.message || "Falha ao aplicar recompensa.")
-  });
-
-  const redeemPointsMutation = useMutation({
-    mutationFn: ({ customerId, points }: { customerId: string; points: number }) => 
-      customersAPI.redeemPoints(customerId, { points_to_redeem: points }),
-    onSuccess: (updatedCustomer, variables) => {
-        const discountValue = (variables.points / 10).toFixed(2);
-        toast.success(`${variables.points} pontos resgatados com sucesso!`);
-        setFormData(f => ({
-            ...f,
-            notes: (f.notes ? f.notes + '\n' : '') + `DESCONTO: R$${discountValue} (resgate de ${variables.points} pontos).`
-        }));
-        queryClient.invalidateQueries({ queryKey: ['customers'] });
-    },
-    onError: (error: any) => toast.error(error.message || "Falha ao resgatar pontos."),
-  });
-
-  const handleRedeemPoints = () => {
-    if (!selectedCustomer || !selectedCustomer.points || selectedCustomer.points <= 0) return;
-    const pointsToRedeemStr = window.prompt(`Quantos pontos deseja resgatar? (Disponível: ${selectedCustomer.points})`);
-    if (pointsToRedeemStr) {
-      const pointsToRedeem = parseInt(pointsToRedeemStr, 10);
-      if (isNaN(pointsToRedeem) || pointsToRedeem <= 0) {
-        toast.error("Por favor, insira um número de pontos válido.");
-        return;
-      }
-      if (pointsToRedeem > selectedCustomer.points) {
-        toast.error("Pontos insuficientes para este resgate.");
-        return;
-      }
-      redeemPointsMutation.mutate({ customerId: selectedCustomer.id, points: pointsToRedeem });
-    }
-  };
-
-  useEffect(() => {
-    if (prevServiceIdRef.current !== null && prevServiceIdRef.current !== formData.serviceId) {
-        setFormData(f => ({ ...f, staffId: '', locationId: '' }));
-    }
-    prevServiceIdRef.current = formData.serviceId;
-  }, [formData.serviceId]);
-
-  useEffect(() => {
-    if (selectedService && selectedService.default_duration_min && formData.startTime) {
-      const [startHour, startMinute] = formData.startTime.split(':').map(Number);
-      const startTimeObject = setMinutes(setHours(formData.date, startHour), startMinute);
-      const newEndTime = addMinutes(startTimeObject, selectedService.default_duration_min);
-      setFormData(f => ({ ...f, endTime: format(newEndTime, 'HH:mm') }));
-    }
-  }, [formData.serviceId, formData.startTime, formData.date, selectedService]);
-
-  const handleSave = () => {
-    if (!appointment) return;
-    
-    if (formData.status === 'completed' && appointment.status !== 'completed') {
-        const currentAppointmentState = {
-            ...appointment,
-            ...formData,
-            startTime: setMinutes(setHours(formData.date, parseInt(formData.startTime.split(':')[0])), parseInt(formData.startTime.split(':')[1])),
-            endTime: setMinutes(setHours(formData.date, parseInt(formData.endTime.split(':')[0])), parseInt(formData.endTime.split(':')[1])),
-        };
-        onSave({ openPaymentModal: true, appointment: currentAppointmentState });
-        onClose();
-        return;
-    }
-
-    const [startHour, startMinute] = formData.startTime.split(':').map(Number);
-    const [endHour, endMinute] = formData.endTime.split(':').map(Number);
-    const finalStartTime = setSeconds(setMinutes(setHours(formData.date, startHour), startMinute), 0);
-    const finalEndTime = setSeconds(setMinutes(setHours(formData.date, endHour), endMinute), 0);
-    
-    const payload = {
-      id: appointment.id, customer: formData.customerId, staff: formData.staffId, service: formData.serviceId, location: formData.locationId, 
-      start_time: format(finalStartTime, "yyyy-MM-dd'T'HH:mm:ss"), 
-      end_time: format(finalEndTime, "yyyy-MM-dd'T'HH:mm:ss"), 
-      status: formData.status, notes: formData.notes,
-    };
-    onSave({ payload });
-  };
-
-  const handleCancelAppointment = () => {
-    if (!appointment || !appointment.id) return;
-    if (window.confirm("Tem certeza que deseja CANCELAR este agendamento?")) {
-        onSave({ payload: { id: appointment.id, status: 'cancelled', cancelled_at: new Date().toISOString() } });
-    }
-  };
-
-  const handleDelete = () => {
-    if (!appointment || !appointment.id) return;
-    if (window.confirm("⚠️ ATENÇÃO! Tem certeza que deseja EXCLUIR PERMANENTEMENTE este agendamento? Esta ação não pode ser desfeita.")) {
-        onDelete(appointment.id);
-    }
-  }
-  
-  if (!appointment) return null;
-
-  return (
-    <Dialog open={!!appointment} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{isNew ? 'Novo Agendamento' : 'Editar Agendamento'}</DialogTitle>
-          {!isNew && ( <p className="text-sm text-muted-foreground">{appointment.customerName} - {appointment.serviceName}</p> )}
-        </DialogHeader>
-        <div className="grid gap-4 py-4">
-            
-            {/* ALERT DE OBSERVACAO DO CLIENTE (INDICAÇÃO) */}
-            {selectedCustomer?.notes && (
-              <Alert variant="default" className="bg-purple-50 border-purple-200 text-purple-800">
-                <Sparkles className="h-4 w-4" />
-                <AlertTitle>Observação do Cliente</AlertTitle>
-                <AlertDescription className="whitespace-pre-line font-medium">
-                  {selectedCustomer.notes}
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {selectedCustomer?.is_truly_new && (
-              <Alert variant="default" className="bg-blue-50 border-blue-200 text-blue-800">
-                <Sparkles className="h-4 w-4" />
-                <AlertTitle>Cliente de Primeira Viagem!</AlertTitle>
-                <AlertDescription>
-                  Lembre-se de aplicar o desconto de 10% no valor do serviço.
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {availableReward && (
-              <Alert variant="default" className="bg-emerald-50 border-emerald-200 text-emerald-800">
-                <Gift className="h-4 w-4" />
-                <AlertTitle>Recompensa Disponível!</AlertTitle>
-                <AlertDescription className="flex items-center justify-between">
-                  <span>Esta cliente tem um desconto de 5% por indicação.</span>
-                  <Button 
-                    size="sm" 
-                    onClick={() => applyRewardMutation.mutate(availableReward.id)}
-                    disabled={isRewardApplied || applyRewardMutation.isPending}
-                  >
-                    {isRewardApplied ? "Aplicada!" : (applyRewardMutation.isPending ? "Aplicando..." : "Aplicar Recompensa")}
-                  </Button>
-                </AlertDescription>
-              </Alert>
-            )}
-
-            {selectedCustomer && (selectedCustomer.points ?? 0) > 0 && (
-              <Alert variant="default" className="bg-amber-50 border-amber-200 text-amber-800">
-                <Gem className="h-4 w-4" />
-                <AlertTitle>Programa de Pontos</AlertTitle>
-                <AlertDescription className="flex items-center justify-between">
-                  <span>
-                    Saldo: <strong>{selectedCustomer.points} pontos</strong> (R$ {((selectedCustomer.points ?? 0) / 10).toFixed(2)})
-                  </span>
-                  <Button 
-                    size="sm" 
-                    variant="outline"
-                    className="border-amber-300 hover:bg-amber-100"
-                    onClick={handleRedeemPoints}
-                    disabled={redeemPointsMutation.isPending}
-                  >
-                    {redeemPointsMutation.isPending ? "Resgatando..." : "Resgatar Pontos"}
-                  </Button>
-                </AlertDescription>
-              </Alert>
-            )}
-
-            <div>
-                <Label>Cliente</Label>
-                <Select value={formData.customerId} onValueChange={(value) => setFormData(f => ({ ...f, customerId: value }))}>
-                    <SelectTrigger><SelectValue placeholder="Selecione um cliente..." /></SelectTrigger>
-                    <SelectContent>{customers.map(c => <SelectItem key={c.id} value={c.id}>{c.full_name}</SelectItem>)}</SelectContent>
-                </Select>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-                <div className="col-span-2">
-                    <Label>Serviço</Label>
-                    <Select value={formData.serviceId} onValueChange={(value) => setFormData(f => ({ ...f, serviceId: value }))}>
-                        <SelectTrigger><SelectValue placeholder="Selecione um serviço" /></SelectTrigger>
-                        <SelectContent>{services.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-                    </Select>
-                </div>
-                <div>
-                    <Label>Valor (R$)</Label>
-                    <Input readOnly disabled value={ selectedService && selectedService.price_centavos ? (selectedService.price_centavos / 100).toFixed(2).replace('.', ',') : '0,00' } />
-                </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-                <div>
-                    <Label>Profissional</Label>
-                    <Select disabled={!formData.serviceId} value={formData.staffId} onValueChange={(value) => setFormData(f => ({ ...f, staffId: value }))}>
-                        <SelectTrigger><SelectValue placeholder="Selecione um profissional..." /></SelectTrigger>
-                        <SelectContent>{filteredStaff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-                    </Select>
-                </div>
-                <div>
-                    <Label>Unidade</Label>
-                    <Select disabled={!formData.staffId} value={formData.locationId} onValueChange={(value) => setFormData(f => ({ ...f, locationId: value }))}>
-                        <SelectTrigger><SelectValue placeholder="Selecione uma unidade..." /></SelectTrigger>
-                        <SelectContent>{filteredLocations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
-                    </Select>
-                </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-                <div>
-                    <Label>Data</Label>
-                    <Popover>
-                        <PopoverTrigger asChild>
-                            <Button variant="outline" className="w-full justify-start text-left font-normal">
-                                <CalendarIcon className="mr-2 h-4 w-4" />
-                                {format(formData.date, 'dd/MM/yyyy')}
-                            </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0">
-                            <Calendar mode="single" selected={formData.date} onSelect={(d) => d && setFormData(f => ({...f, date: d}))} initialFocus locale={ptBR} />
-                        </PopoverContent>
-                    </Popover>
-                </div>
-                <div><Label>Início</Label><Input type="time" value={formData.startTime} onChange={e => setFormData(f => ({ ...f, startTime: e.target.value }))} /></div>
-                <div><Label>Fim</Label><Input type="time" value={formData.endTime} onChange={e => setFormData(f => ({ ...f, endTime: e.target.value }))} /></div>
-            </div>
-            <div>
-                <Label>Status</Label>
-                <Select value={formData.status} onValueChange={(value: AppointmentFromAPI['status']) => setFormData(f => ({ ...f, status: value }))}>
-                    <SelectTrigger><SelectValue/></SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="pending">Pendente</SelectItem>
-                        <SelectItem value="confirmed">Confirmado</SelectItem>
-                        <SelectItem value="completed">Concluído</SelectItem>
-                        <SelectItem value="cancelled">Cancelado</SelectItem>
-                    </SelectContent>
-                </Select>
-            </div>
-            <div><Label>Observações</Label><Textarea value={formData.notes} onChange={e => setFormData(f => ({...f, notes: e.target.value}))}/></div>
-        </div>
-        <DialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-between sm:space-x-2">
-            <div>
-                {!isNew && (
-                    <div className="flex gap-2">
-                        <Button variant="destructive" onClick={handleCancelAppointment} disabled={isSaving || isDeleting}>
-                            Cancelar Agendamento
-                        </Button>
-                        <Button variant="outline" size="icon" onClick={handleDelete} disabled={isSaving || isDeleting} title="Excluir Agendamento (Irreversível)">
-                            <Trash2 className="w-4 h-4" />
-                        </Button>
-                    </div>
-                )}
-            </div>
-            <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={onClose} disabled={isSaving || isDeleting}>{isNew ? 'Cancelar' : 'Fechar'}</Button>
-                <Button onClick={handleSave} disabled={isSaving || isDeleting}>{isSaving ? "Salvando..." : (isNew ? "Criar Agendamento" : "Salvar Alterações")}</Button>
-            </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
+interface ProcessedAppointment { 
+  id: string; 
+  title: string; 
+  start: Date; 
+  end: Date; 
+  resourceId: string; 
+  status: AppointmentStatus; // ✅ Usando o tipo específico (isso resolve o erro do CalendarView)
+  originalData: AppointmentFromAPI; 
+  customerName: string;
+  serviceName: string;
+  staffName: string;
+  startTime: Date;
+  endTime: Date;
 }
 
-
-// FUNÇÃO PARA PEGAR A DATA INICIAL DA URL OU USAR A DATA DE HOJE
-const getInitialDate = (): Date => {
-  if (typeof window === "undefined") {
-    return new Date();
-  }
-  
-  const params = new URLSearchParams(window.location.search);
-  const dateFromUrl = params.get('date');
-
-  if (dateFromUrl && /^\d{4}-\d{2}-\d{2}$/.test(dateFromUrl)) {
-    return new Date(`${dateFromUrl}T12:00:00`);
-  }
-
-  return new Date();
-};
-
-
-// --- COMPONENTE PRINCIPAL ---
 export default function Appointments() {
   const queryClient = useQueryClient();
   
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(getInitialDate);
+  // Estados
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
-  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
-  const [editingAppointment, setEditingAppointment] = useState<ProcessedAppointment | null>(null);
-  const [locationFilter, setLocationFilter] = useState<string>('');
-  const [staffFilter, setStaffFilter] = useState<string>('');
+  const [selectedStaff, setSelectedStaff] = useState<string>("all");
+  const [selectedLocation, setSelectedLocation] = useState<string>("all");
+
+  // Modais
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingAppointment, setEditingAppointment] = useState<any>(null);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [appointmentToPay, setAppointmentToPay] = useState<any>(null);
   
-  const [confirmingPayment, setConfirmingPayment] = useState<ProcessedAppointment | null>(null);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.has('date')) {
-      setViewMode('list');
-      window.history.replaceState({}, '', '/appointments');
-    }
-  }, []); 
-
-  const { data: staffServices = [] } = useQuery<StaffService[]>({ queryKey: ['staffServices'], queryFn: staffServicesAPI.getAll });
-  const { data: staffShifts = [] } = useQuery<StaffShift[]>({ queryKey: ['staffShifts'], queryFn: staffShiftsAPI.getAll });
-  const { data: customers = [] } = useQuery<Customer[]>({ queryKey: ['customers'], queryFn: customersAPI.getAll });
-  const { data: staff = [] } = useQuery<Staff[]>({ queryKey: ['staff'], queryFn: staffAPI.getAll });
-  const { data: services = [] } = useQuery<Service[]>({ queryKey: ['services'], queryFn: servicesAPI.getAll });
-  const { data: locations = [] } = useQuery<Location[]>({ queryKey: ['locations'], queryFn: locationsAPI.getAll });
-  const { data: referrals = [] } = useQuery<Referral[]>({ queryKey: ['referrals'], queryFn: referralsAPI.getAll });
-  
-  const { data: allAppointments = [], isLoading } = useQuery<AppointmentFromAPI[]>({
-    queryKey: ['appointments'],
-    queryFn: appointmentsAPI.getAll,
+  // Formulário
+  const [formData, setFormData] = useState({
+    customer: "", customerName: "", customerPhone: "", 
+    service: "", staff: "", location: "", 
+    date: new Date(), time: "09:00", notes: ""
   });
 
-  const saveAppointment = useMutation({
-      mutationFn: (payload: { id: string } & Partial<Omit<AppointmentFromAPI, 'id'>>) => {
-          const { id, ...data } = payload;
-          return id ? appointmentsAPI.update(id, data) : appointmentsAPI.create(data);
-      },
-      onSuccess: (data, variables) => {
-          const isNew = !variables.id;
-          if(variables.status === 'cancelled') {
-            toast.error("Agendamento cancelado.");
-          } else {
-            toast.success(`Agendamento ${isNew ? 'criado' : 'atualizado'} com sucesso!`);
-          }
-          setEditingAppointment(null);
-          setConfirmingPayment(null);
-          queryClient.invalidateQueries({ queryKey: ['appointments'] });
-          queryClient.invalidateQueries({ queryKey: ['customers'] });
-      },
-      onError: (error: any) => {
-          toast.error(error.message || `Falha ao salvar.`);
-          console.error("Erro ao salvar agendamento:", error);
-      }
-  });
+  // Queries
+  const { data: appointments = [], isLoading } = useQuery<any[]>({ queryKey: ['appointments'], queryFn: appointmentsAPI.getAll });
+  const { data: customers = [] } = useQuery<any[]>({ queryKey: ['customers'], queryFn: customersAPI.getAll });
+  const { data: staffList = [] } = useQuery<any[]>({ queryKey: ['staff'], queryFn: staffAPI.getAll });
+  const { data: services = [] } = useQuery<any[]>({ queryKey: ['services'], queryFn: servicesAPI.getAll });
+  const { data: locations = [] } = useQuery<any[]>({ queryKey: ['locations'], queryFn: locationsAPI.getAll });
 
-  const deleteAppointment = useMutation({
-      mutationFn: (id: string) => appointmentsAPI.delete(id),
-      onSuccess: () => {
-          toast.success("Agendamento excluído com sucesso!");
-          setEditingAppointment(null);
-          queryClient.invalidateQueries({ queryKey: ['appointments'] });
-      },
-      onError: (error: any) => {
-          toast.error(error.message || `Falha ao excluir.`);
-          console.error("Erro ao excluir agendamento:", error);
-      }
-  });
-
+  // Processamento
   const processedAppointments: ProcessedAppointment[] = useMemo(() => {
-    if (!allAppointments) return [];
-    return allAppointments
-      .map(apt => ({
-        id: apt.id, status: apt.status, customerName: apt.customer_name, serviceName: apt.service_name, staffName: apt.staff_name, locationName: apt.location_name,
-        // 🔥 USO DO PARSER CORRIGIDO
-        startTime: parseAppointmentDate(apt.start_time), 
-        endTime: parseAppointmentDate(apt.end_time), 
-        notes: apt.notes, customerId: apt.customer, staffId: apt.staff, serviceId: apt.service, locationId: apt.location,
-      }))
-      .filter(apt => {
-        const locationMatch = locationFilter ? apt.locationId === locationFilter : true;
-        const staffMatch = staffFilter ? apt.staffId === staffFilter : true;
-        return locationMatch && staffMatch;
-      });
-  }, [allAppointments, locationFilter, staffFilter]);
+    return appointments.map((app: any) => ({
+      id: app.id,
+      title: `${app.customer_name} - ${app.service_name}`,
+      start: parseISO(app.start_time),
+      end: parseISO(app.end_time),
+      resourceId: app.staff,
+      status: app.status as AppointmentStatus, // ✅ Forçando o tipo para o TS aceitar
+      originalData: app,
+      customerName: app.customer_name,
+      serviceName: app.service_name,
+      staffName: app.staff_name,
+      startTime: parseISO(app.start_time),
+      endTime: parseISO(app.end_time)
+    }));
+  }, [appointments]);
+
+  const filteredAppointments = useMemo(() => {
+    return processedAppointments.filter(app => {
+      const matchStaff = selectedStaff === "all" || app.originalData.staff === selectedStaff;
+      const matchLocation = selectedLocation === "all" || app.originalData.location === selectedLocation;
+      return matchStaff && matchLocation;
+    });
+  }, [processedAppointments, selectedStaff, selectedLocation]);
 
   const dailyAppointments = useMemo(() => {
-    if (!selectedDate) return [];
-    return processedAppointments.filter(
-      apt => format(apt.startTime, "yyyy-MM-dd") === format(selectedDate, "yyyy-MM-dd")
-    ).sort((a, b) => a.startTime.getTime() - b.startTime.getTime());
-  }, [processedAppointments, selectedDate]);
-  
-  const handleSaveFlow = (data: any) => {
-    if (data.openPaymentModal) {
-        setConfirmingPayment(data.appointment);
-    } else if (data.payload) {
-        saveAppointment.mutate(data.payload);
+    return filteredAppointments
+      .filter(app => isSameDay(app.start, selectedDate))
+      .sort((a, b) => a.start.getTime() - b.start.getTime())
+      .map(app => ({
+        id: app.id,
+        customerName: app.originalData.customer_name,
+        serviceName: app.originalData.service_name,
+        staffName: app.originalData.staff_name,
+        startTime: app.start,
+        endTime: app.end,
+        status: app.status,
+        originalData: app.originalData
+      }));
+  }, [filteredAppointments, selectedDate]);
+
+  // Mutations
+  const createMutation = useMutation({
+    mutationFn: appointmentsAPI.create,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appointments'] });
+      setIsModalOpen(false);
+      toast.success("Agendamento criado!");
+    },
+    onError: () => toast.error("Erro ao criar.")
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: any) => appointmentsAPI.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appointments'] });
+      setIsModalOpen(false);
+      setEditingAppointment(null);
+      toast.success("Atualizado com sucesso!");
+    },
+    onError: () => toast.error("Erro ao atualizar.")
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: appointmentsAPI.delete,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appointments'] });
+      setIsModalOpen(false);
+      toast.success("Removido com sucesso.");
+    },
+    onError: () => toast.error("Erro ao remover.")
+  });
+
+  // Handlers
+  const handleNewAppointmentClick = () => {
+    setEditingAppointment(null);
+    setFormData({
+      customer: "", customerName: "", customerPhone: "",
+      service: "", staff: "", location: selectedLocation !== "all" ? selectedLocation : "",
+      date: selectedDate, time: "09:00", notes: ""
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleEditClick = (appointmentData: any) => {
+    const data = appointmentData.originalData || appointmentData;
+    setEditingAppointment(data);
+    const startDate = parseISO(data.start_time);
+    
+    setFormData({
+      customer: data.customer || "",
+      customerName: data.customer_name || "",
+      customerPhone: "", 
+      service: data.service || "",
+      staff: data.staff || "",
+      location: data.location || "",
+      date: startDate,
+      time: format(startDate, "HH:mm"),
+      notes: data.notes || ""
+    });
+    setIsModalOpen(true);
+  };
+
+  const handleSave = () => {
+    if (!formData.service || !formData.staff || !formData.date || !formData.time) {
+      toast.warning("Preencha os campos obrigatórios.");
+      return;
+    }
+
+    const [hours, minutes] = formData.time.split(':').map(Number);
+    const startDateTime = setMinutes(setHours(formData.date, hours), minutes);
+
+    const payload: any = {
+      service: formData.service,
+      staff: formData.staff,
+      location: formData.location,
+      start_time: startDateTime.toISOString(),
+      notes: formData.notes
+    };
+
+    if (formData.customer && formData.customer !== "new") {
+      payload.customer = formData.customer;
+    } else {
+      payload.customer_name = formData.customerName;
+      payload.customer_phone = formData.customerPhone;
+    }
+
+    if (editingAppointment) {
+      updateMutation.mutate({ id: editingAppointment.id, data: payload });
+    } else {
+      const createPayload = {
+        ...payload,
+        items: [{ service: payload.service, staff: payload.staff, start_time: payload.start_time }]
+      };
+      createMutation.mutate(createPayload);
     }
   };
 
-  const handleConfirmPayment = (paymentDetails: {
-    payment_method: string;
-    discount_centavos: number;
-    final_amount_centavos: number;
-  }) => {
-    if (!confirmingPayment) return;
-
-    const payload = {
-        id: confirmingPayment.id,
-        status: 'completed' as 'completed',
-        ...paymentDetails
-    };
-
-    saveAppointment.mutate(payload);
-  };
-  
-  const servicePriceForPayment = useMemo(() => {
-    if (!confirmingPayment) return 0;
-    const service = services.find(s => s.id === confirmingPayment.serviceId);
-    return service?.price_centavos || 0;
-  }, [confirmingPayment, services]);
-
-
-  const handleNewAppointmentClick = () => {
-    const newAppointmentTemplate: ProcessedAppointment = {
-      id: '', customerName: '', staffName: '', serviceName: '', locationName: '',
-      startTime: setSeconds(setMinutes(setHours(new Date(), 9), 0), 0),
-      endTime: setSeconds(setMinutes(setHours(new Date(), 10), 0), 0),
-      status: 'confirmed', notes: '', customerId: '', staffId: '', serviceId: '', locationId: '',
-    };
-    setEditingAppointment(newAppointmentTemplate);
+  const handleStatusChange = (newStatus: string) => {
+    if (!editingAppointment) return;
+    if (newStatus === 'completed') {
+      setIsModalOpen(false);
+      setAppointmentToPay(editingAppointment);
+      setPaymentModalOpen(true);
+    } else {
+      updateMutation.mutate({ id: editingAppointment.id, data: { status: newStatus } });
+    }
   };
 
   return (
-    <div className="p-6 space-y-6">
-      <AppointmentEditModal 
-        appointment={editingAppointment}
-        onClose={() => setEditingAppointment(null)}
-        onSave={handleSaveFlow}
-        onDelete={deleteAppointment.mutate}
-        isSaving={saveAppointment.isPending}
-        isDeleting={deleteAppointment.isPending}
-        customers={customers}
-        staff={staff}
-        services={services}
-        locations={locations}
-        staffServices={staffServices}
-        staffShifts={staffShifts}
-        referrals={referrals}
-      />
-
-      <PaymentConfirmationModal
-        isOpen={!!confirmingPayment}
-        onClose={() => setConfirmingPayment(null)}
-        onConfirm={handleConfirmPayment}
-        servicePrice={servicePriceForPayment}
-        isSaving={saveAppointment.isPending}
-      />
-
-      <div className="flex items-center justify-between gap-4">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-500 bg-stone-50/50 dark:bg-stone-950 min-h-screen font-sans">
+      
+      {/* --- CABEÇALHO --- */}
+      <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6">
         <div>
-          <h1 className="text-3xl font-semibold text-foreground mb-1">Agenda</h1>
-            <Popover open={isDatePickerOpen} onOpenChange={setIsDatePickerOpen}>
-              <PopoverTrigger asChild>
-                <Button variant="ghost" className="text-muted-foreground text-lg p-0 h-auto">
-                  {selectedDate ? format(selectedDate, "EEEE, dd 'de' MMMM", { locale: ptBR }) : "Selecione uma data" }
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0">
-                <Calendar
-                  mode="single" selected={selectedDate}
-                  onSelect={(date) => { setSelectedDate(date); setIsDatePickerOpen(false); }}
-                  initialFocus locale={ptBR}
-                />
-              </PopoverContent>
-            </Popover>
+          <h1 className="text-2xl font-bold text-stone-800 dark:text-stone-100 tracking-tight flex items-center gap-3">
+            <div className="p-2 bg-white dark:bg-stone-900 rounded-lg shadow-sm border border-stone-100 dark:border-stone-800">
+               <CalendarIcon className="w-5 h-5 text-[#C6A87C]" />
+            </div>
+            Agenda
+          </h1>
+          <p className="text-stone-500 dark:text-stone-400 text-sm mt-1 ml-1">
+            Gerencie atendimentos e disponibilidade.
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
-            <Button variant={viewMode === "list" ? "secondary" : "ghost"} size="sm" onClick={() => setViewMode("list")} className="gap-2">
-              <List className="w-4 h-4" /> Lista
-            </Button>
-            <Button variant={viewMode === "calendar" ? "secondary" : "ghost"} size="sm" onClick={() => setViewMode("calendar")} className="gap-2">
-              <CalendarIcon className="w-4 h-4" /> Calendário
-            </Button>
+
+        {/* BARRA DE FERRAMENTAS */}
+        <div className="w-full xl:w-auto flex flex-col md:flex-row gap-3 bg-white dark:bg-stone-900 p-2 rounded-xl border border-stone-100 dark:border-stone-800 shadow-sm">
+          
+          {/* 1. Seletor de Data */}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="justify-start text-left font-normal border-stone-200 dark:border-stone-800 hover:bg-stone-50 dark:hover:bg-stone-800 min-w-[140px]">
+                <CalendarIcon className="mr-2 h-4 w-4 text-[#C6A87C]" />
+                {selectedDate ? format(selectedDate, "dd/MM/yyyy") : <span>Data</span>}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0">
+              <Calendar mode="single" selected={selectedDate} onSelect={(d) => d && setSelectedDate(d)} initialFocus />
+            </PopoverContent>
+          </Popover>
+
+          {/* 2. Filtros (Unidade e Staff) */}
+          <div className="flex gap-2 flex-1 md:flex-none">
+             <Select value={selectedLocation} onValueChange={setSelectedLocation}>
+                <SelectTrigger className="w-full md:w-[140px] border-stone-200 dark:border-stone-800">
+                  <SelectValue placeholder="Unidade" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas Unidades</SelectItem>
+                  {locations.map((loc: any) => <SelectItem key={loc.id} value={loc.id}>{loc.name}</SelectItem>)}
+                </SelectContent>
+             </Select>
+
+             <Select value={selectedStaff} onValueChange={setSelectedStaff}>
+                <SelectTrigger className="w-full md:w-[140px] border-stone-200 dark:border-stone-800">
+                  <SelectValue placeholder="Profissional" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos Prof.</SelectItem>
+                  {staffList.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                </SelectContent>
+             </Select>
           </div>
 
-          <Select value={locationFilter || ALL_FILTER_VALUE} onValueChange={(value) => setLocationFilter(value === ALL_FILTER_VALUE ? '' : value)}>
-            <SelectTrigger className="w-40"><SelectValue placeholder="Unidade" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_FILTER_VALUE}>Todas Unidades</SelectItem>
-              {locations.map(loc => <SelectItem key={loc.id} value={loc.id}>{loc.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <div className="w-px h-8 bg-stone-200 dark:bg-stone-800 hidden md:block mx-1"></div>
 
-          <Select value={staffFilter || ALL_FILTER_VALUE} onValueChange={(value) => setStaffFilter(value === ALL_FILTER_VALUE ? '' : value)}>
-            <SelectTrigger className="w-40"><SelectValue placeholder="Profissional" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_FILTER_VALUE}>Todos Profissionais</SelectItem>
-              {staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          
-          <Button onClick={handleNewAppointmentClick}>
-            <Plus className="w-4 h-4 mr-2" />
-            Novo Agendamento
-          </Button>
+          {/* 3. Toggle View & Novo */}
+          <div className="flex gap-2 w-full md:w-auto">
+              <div className="flex bg-stone-100 dark:bg-stone-800 p-1 rounded-lg">
+                <Button 
+                   variant="ghost" size="icon"
+                   className={`h-8 w-8 rounded-md transition-all ${viewMode === 'list' ? 'bg-white dark:bg-stone-700 text-[#C6A87C] shadow-sm' : 'text-stone-400'}`}
+                   onClick={() => setViewMode("list")}
+                >
+                  <List className="h-4 w-4" />
+                </Button>
+                <Button 
+                   variant="ghost" size="icon"
+                   className={`h-8 w-8 rounded-md transition-all ${viewMode === 'calendar' ? 'bg-white dark:bg-stone-700 text-[#C6A87C] shadow-sm' : 'text-stone-400'}`}
+                   onClick={() => setViewMode("calendar")}
+                >
+                  <CalendarIcon className="h-4 w-4" />
+                </Button>
+              </div>
+
+              <Button onClick={handleNewAppointmentClick} className="flex-1 md:flex-none bg-[#C6A87C] hover:bg-[#B08D55] text-white shadow-sm transition-all font-medium px-6">
+                <Plus className="w-4 h-4 mr-2" />
+                Novo Agendamento
+              </Button>
+          </div>
         </div>
       </div>
 
+      {/* --- ÁREA PRINCIPAL --- */}
       {isLoading ? (
-        <p className="text-center text-muted-foreground">Carregando agendamentos...</p>
-      ) : viewMode === 'list' ? (
-        <Card className="p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <CalendarIcon className="w-5 h-5 text-muted-foreground" />
-            <h2 className="text-lg font-semibold text-foreground">Agendamentos do Dia</h2>
-          </div>
-          <div className="space-y-3">
-            {dailyAppointments.length > 0 ? (
-              dailyAppointments.map((appointment) => (
-                <AppointmentCard
-                  key={appointment.id}
-                  {...appointment}
-                  onClick={() => setEditingAppointment(appointment)}
-                />
-              ))
-            ) : (
-              <p className="text-center text-muted-foreground py-8">Nenhum agendamento para esta data.</p>
+        <div className="flex flex-col items-center justify-center py-20 gap-3">
+           <div className="w-8 h-8 border-4 border-[#C6A87C]/30 border-t-[#C6A87C] rounded-full animate-spin"></div>
+           <p className="text-stone-400 text-sm">Carregando sua agenda...</p>
+        </div>
+      ) : (
+        <div className="bg-white dark:bg-stone-900 rounded-xl border border-stone-100 dark:border-stone-800 shadow-sm overflow-hidden min-h-[500px]">
+          
+          {viewMode === 'list' ? (
+            <div className="p-4 md:p-6">
+              <div className="flex items-center justify-between mb-6 pb-4 border-b border-stone-100 dark:border-stone-800">
+                 <div className="flex items-center gap-3">
+                    <div className="text-3xl font-bold text-stone-800 dark:text-stone-100">{format(selectedDate, "dd")}</div>
+                    <div className="flex flex-col">
+                       <span className="text-sm font-medium text-stone-500 uppercase tracking-wide">{format(selectedDate, "MMMM", { locale: ptBR })}</span>
+                       <span className="text-xs text-stone-400 capitalize">{format(selectedDate, "EEEE", { locale: ptBR })}</span>
+                    </div>
+                 </div>
+                 <div className="px-3 py-1 bg-stone-100 dark:bg-stone-800 rounded-full text-xs font-medium text-stone-500">
+                    {dailyAppointments.length} agendamentos
+                 </div>
+              </div>
+              
+              <div className="space-y-3">
+                {dailyAppointments.length > 0 ? (
+                  dailyAppointments.map((appointment) => (
+                    <AppointmentCard
+                      key={appointment.id}
+                      {...appointment}
+                      onClick={() => handleEditClick(appointment)} 
+                    />
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-16 text-center">
+                     <div className="w-16 h-16 bg-stone-50 dark:bg-stone-800 rounded-full flex items-center justify-center mb-4">
+                        <Clock className="w-8 h-8 text-stone-300" />
+                     </div>
+                     <h3 className="text-stone-600 dark:text-stone-300 font-medium">Dia Livre</h3>
+                     <p className="text-stone-400 text-sm mt-1">Nenhum agendamento para esta data.</p>
+                     <Button variant="ghost" onClick={handleNewAppointmentClick} className="text-[#C6A87C] mt-2 hover:bg-stone-50">
+                        + Adicionar agora
+                     </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="w-full h-full p-2">
+               <div className="w-full h-full">
+                  <CalendarView
+                    appointments={processedAppointments}
+                    onAppointmentClick={handleEditClick}
+                    onDateClick={(date) => { setSelectedDate(date); setViewMode("list"); }}
+                  />
+               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* --- MODAL (NOVO / EDITAR) --- */}
+      <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
+        <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800 p-0 gap-0">
+          
+          <DialogHeader className="px-6 py-4 border-b border-stone-100 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50">
+            <DialogTitle className="text-lg font-bold text-stone-800 dark:text-stone-100">
+               {editingAppointment ? "Detalhes do Agendamento" : "Novo Agendamento"}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="p-6 space-y-5">
+            {/* Cliente */}
+            <div className="space-y-1.5">
+              <Label className="text-stone-500 text-xs uppercase tracking-wider font-semibold">Cliente</Label>
+              <Select 
+                value={formData.customer} 
+                onValueChange={(val) => setFormData({...formData, customer: val})}
+                disabled={!!editingAppointment}
+              >
+                <SelectTrigger className="h-11 bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800 focus:ring-[#C6A87C]/20">
+                  <SelectValue placeholder="Selecione o cliente..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="new" className="text-[#C6A87C] font-medium">+ Cadastrar Novo</SelectItem>
+                  {customers.map((c: any) => <SelectItem key={c.id} value={c.id}>{c.full_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {formData.customer === "new" && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-stone-50 dark:bg-stone-900 rounded-xl border border-stone-100 dark:border-stone-800 animate-in slide-in-from-top-2">
+                <div>
+                   <Label className="text-xs text-stone-500">Nome Completo</Label>
+                   <Input className="mt-1 bg-white dark:bg-stone-950" value={formData.customerName} onChange={e => setFormData({...formData, customerName: e.target.value})} />
+                </div>
+                <div>
+                   <Label className="text-xs text-stone-500">WhatsApp</Label>
+                   <Input className="mt-1 bg-white dark:bg-stone-950" placeholder="(11) 9..." value={formData.customerPhone} onChange={e => setFormData({...formData, customerPhone: e.target.value})} />
+                </div>
+              </div>
+            )}
+
+            {/* Serviço e Profissional */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-stone-500 text-xs uppercase tracking-wider font-semibold">Serviço</Label>
+                <Select value={formData.service} onValueChange={(val) => setFormData({...formData, service: val})}>
+                  <SelectTrigger className="h-11 bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800"><SelectValue placeholder="Selecione..." /></SelectTrigger>
+                  <SelectContent>
+                    {services.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name} - R${(s.price_centavos/100).toFixed(2)}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-stone-500 text-xs uppercase tracking-wider font-semibold">Profissional</Label>
+                <Select value={formData.staff} onValueChange={(val) => setFormData({...formData, staff: val})}>
+                  <SelectTrigger className="h-11 bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800"><SelectValue placeholder="Selecione..." /></SelectTrigger>
+                  <SelectContent>
+                    {staffList.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Data e Hora */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+               <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                 <Label className="text-stone-500 text-xs uppercase tracking-wider font-semibold">Data</Label>
+                 <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="w-full h-11 justify-start text-left font-normal bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800">
+                        <CalendarIcon className="mr-2 h-4 w-4 text-stone-400" />
+                        {formData.date ? format(formData.date, "dd/MM/yyyy") : <span>Data</span>}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0"><Calendar mode="single" selected={formData.date} onSelect={(d) => d && setFormData({...formData, date: d})} initialFocus /></PopoverContent>
+                 </Popover>
+               </div>
+               
+               <div className="space-y-1.5">
+                 <Label className="text-stone-500 text-xs uppercase tracking-wider font-semibold">Horário</Label>
+                 <Input type="time" className="h-11 bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800" value={formData.time} onChange={(e) => setFormData({...formData, time: e.target.value})} />
+               </div>
+
+               <div className="space-y-1.5">
+                 <Label className="text-stone-500 text-xs uppercase tracking-wider font-semibold">Unidade</Label>
+                 <Select value={formData.location} onValueChange={(val) => setFormData({...formData, location: val})}>
+                    <SelectTrigger className="h-11 bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800"><SelectValue placeholder="Local" /></SelectTrigger>
+                    <SelectContent>{locations.map((l: any) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent>
+                 </Select>
+               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-stone-500 text-xs uppercase tracking-wider font-semibold">Observações</Label>
+              <Textarea 
+                placeholder="Anotações internas..." 
+                className="bg-stone-50 dark:bg-stone-900 border-stone-200 dark:border-stone-800 resize-none h-20"
+                value={formData.notes}
+                onChange={(e) => setFormData({...formData, notes: e.target.value})}
+              />
+            </div>
+            
+            {/* Ações de Status */}
+            {editingAppointment && (
+              <div className="pt-4 border-t border-stone-100 dark:border-stone-800">
+                 <Label className="text-xs text-stone-400 uppercase mb-3 block">Alterar Status</Label>
+                 <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="outline" onClick={() => handleStatusChange('confirmed')} className="text-blue-600 border-blue-200 hover:bg-blue-50 h-9">Confirmar</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => handleStatusChange('completed')} className="text-emerald-600 border-emerald-200 hover:bg-emerald-50 h-9">Concluir & Pagar</Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => handleStatusChange('cancelled')} className="text-red-600 border-red-200 hover:bg-red-50 h-9">Cancelar</Button>
+                 </div>
+              </div>
             )}
           </div>
-        </Card>
-      ) : (
-        <CalendarView
-          appointments={processedAppointments}
-          onAppointmentClick={(apt) => setEditingAppointment(apt as ProcessedAppointment)}
-          onDateClick={(date) => {
-              setSelectedDate(date);
-              setViewMode("list");
-          }}
+
+          <DialogFooter className="px-6 py-4 bg-stone-50 dark:bg-stone-900 border-t border-stone-100 dark:border-stone-800 flex-col sm:flex-row gap-3">
+            {editingAppointment && (
+               <Button type="button" variant="ghost" onClick={() => { 
+                  if(confirm("Deseja realmente excluir este agendamento?")) deleteMutation.mutate(editingAppointment.id) 
+               }} className="text-red-500 hover:text-red-700 hover:bg-red-50 sm:mr-auto">
+                 <Trash2 className="w-4 h-4 mr-2" /> Excluir
+               </Button>
+            )}
+            <div className="flex gap-3 w-full sm:w-auto">
+                <Button variant="outline" onClick={() => setIsModalOpen(false)} className="flex-1 sm:flex-none">Cancelar</Button>
+                <Button onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending} className="flex-1 sm:flex-none bg-[#C6A87C] hover:bg-[#B08D55] text-white font-semibold shadow-md">
+                   {createMutation.isPending || updateMutation.isPending ? "Salvando..." : "Salvar Agendamento"}
+                </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL PAGAMENTO */}
+      {appointmentToPay && (
+        <PaymentConfirmationModal
+          isOpen={paymentModalOpen}
+          onClose={() => setPaymentModalOpen(false)}
+          onConfirm={() => {
+            setPaymentModalOpen(false);
+            updateMutation.mutate({ id: appointmentToPay.id, data: { status: 'completed' } });
+          }} 
+          appointment={appointmentToPay}
         />
       )}
     </div>

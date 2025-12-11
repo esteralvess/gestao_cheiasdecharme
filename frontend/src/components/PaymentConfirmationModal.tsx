@@ -1,97 +1,101 @@
-import { useState, useMemo, useEffect } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Check, DollarSign, Calendar, User, Scissors } from "lucide-react";
+import { format, parseISO } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
-interface PaymentConfirmationModalProps {
-    isOpen: boolean;
-    onClose: () => void;
-    onConfirm: (paymentDetails: {
-        payment_method: string;
-        discount_centavos: number;
-        final_amount_centavos: number;
-    }) => void;
-    servicePrice: number; // in centavos
-    isSaving: boolean;
+// 👇 AQUI ESTÁ A CORREÇÃO: Adicionei 'appointment' na interface
+export interface PaymentConfirmationModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  appointment: any; // ✅ Agora ele aceita o objeto de agendamento
 }
 
-export function PaymentConfirmationModal({ isOpen, onClose, onConfirm, servicePrice, isSaving }: PaymentConfirmationModalProps) {
-    const [discountReais, setDiscountReais] = useState('0');
-    const [paymentMethod, setPaymentMethod] = useState('pix');
+export function PaymentConfirmationModal({ 
+  isOpen, 
+  onClose, 
+  onConfirm, 
+  appointment 
+}: PaymentConfirmationModalProps) {
+  
+  // Proteção contra dados vazios
+  if (!appointment) return null;
 
-    useEffect(() => {
-        if (isOpen) {
-            setDiscountReais('0');
-            setPaymentMethod('pix');
-        }
-    }, [isOpen]);
+  // Garante que temos um objeto de data válido
+  const date = appointment.startTime instanceof Date 
+    ? appointment.startTime 
+    : parseISO(appointment.originalData?.start_time || appointment.start_time || new Date().toISOString());
 
-    const finalAmountCentavos = useMemo(() => {
-        const discountCentavos = Math.round(parseFloat(discountReais.replace(',', '.')) * 100) || 0;
-        return servicePrice - discountCentavos;
-    }, [servicePrice, discountReais]);
+  // Calcula valor (usando final_amount ou service price)
+  const priceCentavos = appointment.originalData?.final_amount_centavos 
+    || appointment.originalData?.service_price_centavos 
+    || appointment.final_amount_centavos 
+    || 0;
+    
+  const price = (priceCentavos / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-    const handleConfirm = () => {
-        const discountCentavos = Math.round(parseFloat(discountReais.replace(',', '.')) * 100) || 0;
-        onConfirm({
-            payment_method: paymentMethod,
-            discount_centavos: discountCentavos,
-            final_amount_centavos: finalAmountCentavos,
-        });
-    };
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800">
+        <DialogHeader>
+          <div className="mx-auto w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center mb-4">
+            <DollarSign className="w-6 h-6 text-emerald-600" />
+          </div>
+          <DialogTitle className="text-center text-xl text-stone-800 dark:text-stone-100">
+            Confirmar Pagamento
+          </DialogTitle>
+          <DialogDescription className="text-center text-stone-500">
+            Deseja marcar este agendamento como concluído e pago?
+          </DialogDescription>
+        </DialogHeader>
 
-    return (
-        <Dialog open={isOpen} onOpenChange={onClose}>
-            <DialogContent>
-                <DialogHeader>
-                    <DialogTitle>Confirmar Recebimento</DialogTitle>
-                </DialogHeader>
-                <div className="py-4 space-y-4">
-                    <div className="p-4 bg-muted rounded-lg text-center">
-                        <p className="text-sm text-muted-foreground">Valor Original do Serviço</p>
-                        <p className="text-2xl font-bold">R$ {(servicePrice / 100).toFixed(2)}</p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <Label htmlFor="discount">Desconto (R$)</Label>
-                            <Input 
-                                id="discount" 
-                                type="number" 
-                                step="0.01"
-                                value={discountReais}
-                                onChange={(e) => setDiscountReais(e.target.value)}
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="payment-method">Método de Pagamento</Label>
-                            <Select value={paymentMethod} onValueChange={setPaymentMethod}>
-                                <SelectTrigger id="payment-method">
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="pix">Pix</SelectItem>
-                                    <SelectItem value="credito">Crédito</SelectItem>
-                                    <SelectItem value="debito">Débito</SelectItem>
-                                    <SelectItem value="dinheiro">Dinheiro</SelectItem>
-                                    <SelectItem value="outros">Outro</SelectItem> {/* ✅ CORREÇÃO */}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                    </div>
-                     <div className="p-4 border border-primary rounded-lg text-center">
-                        <p className="text-sm text-muted-foreground">Valor Final a Receber</p>
-                        <p className="text-3xl font-bold text-primary">R$ {(finalAmountCentavos / 100).toFixed(2)}</p>
-                    </div>
-                </div>
-                <DialogFooter>
-                    <Button variant="outline" onClick={onClose} disabled={isSaving}>Cancelar</Button>
-                    <Button onClick={handleConfirm} disabled={isSaving}>
-                        {isSaving ? "Salvando..." : "Confirmar Recebimento"}
-                    </Button>
-                </DialogFooter>
-            </DialogContent>
-        </Dialog>
-    );
+        <div className="bg-stone-50 dark:bg-stone-900 p-4 rounded-lg space-y-3 my-2 border border-stone-100 dark:border-stone-800">
+          
+          <div className="flex justify-between items-center pb-3 border-b border-stone-200 dark:border-stone-800">
+             <span className="text-sm text-stone-500 font-medium">Valor a Receber</span>
+             <span className="text-lg font-bold text-emerald-600">{price}</span>
+          </div>
+
+          <div className="space-y-2 text-sm text-stone-600 dark:text-stone-400">
+             <div className="flex items-center gap-2">
+                <User className="w-4 h-4 text-[#C6A87C]" />
+                <span>{appointment.customerName || appointment.customer_name}</span>
+             </div>
+             <div className="flex items-center gap-2">
+                <Scissors className="w-4 h-4 text-[#C6A87C]" />
+                <span>{appointment.serviceName || appointment.service_name}</span>
+             </div>
+             <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-[#C6A87C]" />
+                <span className="capitalize">
+                  {format(date, "EEEE, d 'de' MMMM 'às' HH:mm", { locale: ptBR })}
+                </span>
+             </div>
+          </div>
+
+        </div>
+
+        <DialogFooter className="flex-col sm:flex-row gap-2">
+          <Button variant="outline" onClick={onClose} className="w-full sm:w-auto dark:text-stone-300">
+            Cancelar
+          </Button>
+          <Button 
+            onClick={onConfirm} 
+            className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+          >
+            <Check className="w-4 h-4 mr-2" />
+            Confirmar Recebimento
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
