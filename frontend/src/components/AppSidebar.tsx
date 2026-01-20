@@ -10,7 +10,8 @@ import {
   UserCircle, 
   ShieldCheck, 
   Percent,
-  LogOut
+  LogOut,
+  Package // <--- Importei o ícone Package
 } from "lucide-react";
 import {
   Sidebar,
@@ -31,6 +32,7 @@ import { LogoutButton } from "./LogoutButton";
 const mainMenuItems = [
   { title: "Visão Geral", url: "/dashboard", icon: Home },
   { title: "Agenda", url: "/appointments", icon: Calendar },
+  { title: "Gestão de Pacotes", url: "/packages", icon: Package }, // <--- NOVO ITEM
   { title: "Clientes", url: "/customers", icon: Users },
 ];
 
@@ -57,8 +59,6 @@ export function AppSidebar() {
       <SidebarMenuItem key={item.url}>
         <SidebarMenuButton 
           asChild 
-          // Se estiver ativo: fundo dourado claro + texto dourado + borda direita
-          // Se inativo: texto cinza + hover cinza claro
           className={`
             h-10 transition-all duration-200 
             ${isActive 
@@ -157,7 +157,6 @@ export function AppSidebar() {
             </SidebarMenuItem>
 
             <SidebarMenuItem className="mt-2 pt-2 border-t border-stone-100">
-               {/* Aqui mantemos seu componente de Logout, mas podemos estilizar se precisar */}
                <LogoutButton />
             </SidebarMenuItem>
 

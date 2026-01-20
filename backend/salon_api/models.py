@@ -319,13 +319,17 @@ class Promotion(models.Model):
     active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
-    # 💡 NOVOS CAMPOS PARA REGRAS DE PACOTE
+    # Validade geral do pacote
     days_to_expire = models.IntegerField(default=30, help_text="Validade do pacote em dias")
-    min_interval_days = models.IntegerField(default=0, help_text="Mínimo de dias entre sessões")
-    suggested_interval_days = models.IntegerField(default=15, help_text="Intervalo sugerido (ex: 15 dias para manutenção)")
+    
+    # Mantidos para compatibilidade, mas o foco agora é no intervalo por item
+    min_interval_days = models.IntegerField(default=0)
+    suggested_interval_days = models.IntegerField(default=15)
     
     class Meta:
-        managed = False
+        # ⚠️ IMPORTANTE: Se você já criou a tabela manualmente no banco, mantenha False.
+        # Se quiser que o Django gerencie as mudanças via makemigrations, mude para True.
+        managed = False 
         db_table = 'promotions'
 
     def __str__(self):
@@ -334,8 +338,24 @@ class Promotion(models.Model):
 class PromotionItem(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     promotion = models.ForeignKey(Promotion, on_delete=models.CASCADE, related_name='items', db_column='promotion_id')
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, db_column='service_id')
+    
+    # 💡 AJUSTE: Permitimos service_id nulo no banco TEMPORARIAMENTE para processar o objeto,
+    # ou garantimos que ele sempre exista. No seu caso, como o frontend "explode" o combo,
+    # o service_id sempre existirá para os itens salvos.
+    service = models.ForeignKey('Service', on_delete=models.CASCADE, db_column='service_id', null=True, blank=True)
+    
     quantity = models.IntegerField(default=1)
+
+    # 💡 NOVOS CAMPOS PARA RESOLVER SEU PROBLEMA:
+    
+    # Identifica se este item veio de um Combo (para agrupar visualmente depois)
+    combo_id = models.UUIDField(null=True, blank=True, help_text="ID do combo original se este item fizer parte de um bloco")
+    
+    # Salva a frequência específica deste item (ex: 7 para mão, 14 para pé)
+    custom_interval = models.IntegerField(default=0, help_text="Intervalo de repetição em dias para este serviço específico")
+    
+    # Campo auxiliar para o frontend
+    item_type = models.CharField(max_length=20, default='service', choices=[('service', 'Serviço'), ('combo', 'Combo')])
 
     class Meta:
         managed = False

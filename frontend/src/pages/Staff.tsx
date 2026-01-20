@@ -3,24 +3,26 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { 
   Plus, 
   Calendar as CalendarIcon, 
-  DollarSign, 
   Umbrella, 
   Pencil, 
   Trash2, 
-  Check, 
-  X, 
   MapPin, 
   Paintbrush, 
   Clock, 
   UserCog, 
   ChevronLeft,
   ChevronRight,
-  MoreHorizontal,
   Wallet,
   Users,
-  CheckCircle2,
   CalendarDays,
-  ArrowUpRight
+  ArrowUpRight,
+  Save,
+  Check,
+  Package,
+  Calculator, // Novo ícone
+  DollarSign,
+  CheckCircle2,
+  MoreHorizontal
 } from "lucide-react";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Switch } from "@/components/ui/switch"; 
 
 import { 
   format, 
@@ -50,8 +53,8 @@ import {
   startOfDay, 
   endOfDay, 
   isSameMonth, 
-  isToday, 
-  differenceInDays 
+  isToday,
+  isSameDay
 } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
@@ -77,8 +80,8 @@ interface Location { id: string; name: string; }
 
 interface ShiftPayload { 
   id?: number; 
-  staff_id: string; 
-  location_id: string; 
+  staff: string;       
+  location: string;    
   weekday: number; 
   start_time: string; 
   end_time: string; 
@@ -88,82 +91,164 @@ const ALL_LOCATIONS_VALUE = "all-locations-filter";
 
 // --- FUNÇÕES AUXILIARES ---
 const getLocationNameById = (locationId: string, locations: Location[]): string => { return locations.find(l => l.id === locationId)?.name || 'Desconhecida'; };
-const getSchedulesForStaffAndDay = (staffId: string, dayOfWeek: number, shifts: StaffShift[], selectedLocationId: string): StaffShift[] => { const dbWeekday = dayOfWeek === 0 ? 7 : dayOfWeek; return shifts.filter(s => { const matchesDay = s.staff_id === staffId && s.weekday === dbWeekday; if (!selectedLocationId) return matchesDay; return matchesDay && (s.location_id === selectedLocationId); }); };
-const hasTimeOffOnDate = (staffId: string, date: Date, exceptions: StaffException[]): StaffException | undefined => { return exceptions.find(exc => { const excStart = startOfDay(new Date(exc.start_date)).getTime(); const excEnd = endOfDay(new Date(exc.end_date)).getTime(); const dateToCheck = startOfDay(date).getTime(); return exc.staff_id === staffId && exc.status === 'aprovado' && dateToCheck >= excStart && dateToCheck <= excEnd; }); };
+const getSchedulesForStaffAndDay = (staffId: string, dayOfWeek: number, shifts: StaffShift[], selectedLocationId: string): StaffShift[] => { const dbWeekday = dayOfWeek === 0 ? 7 : dayOfWeek; return shifts.filter(s => { const matchesStaff = String(s.staff_id) === String(staffId); const matchesDay = Number(s.weekday) === dbWeekday; const matchesLocation = (!selectedLocationId || selectedLocationId === ALL_LOCATIONS_VALUE) ? true : String(s.location_id || (s as any).location) === String(selectedLocationId); return matchesStaff && matchesDay && matchesLocation; }); };
+
+const hasTimeOffOnDate = (staffId: string, date: Date, exceptions: StaffException[]): StaffException | undefined => { 
+    return exceptions.find(exc => { 
+        const dateString = format(date, 'yyyy-MM-dd');
+        return String(exc.staff_id) === String(staffId) && 
+               exc.status === 'aprovado' && 
+               dateString >= exc.start_date && 
+               dateString <= exc.end_date; 
+    }); 
+};
 
 const timeOffTypeColors: Record<string, string> = { férias: "bg-blue-500", folga: "bg-amber-500", atestado: "bg-red-500" };
-const statusColors: Record<string, string> = { aprovado: "bg-green-500", pendente: "bg-amber-500", rejeitado: "bg-red-500", pago: "bg-emerald-500", pendente_pagamento: "bg-amber-500", cancelado: "bg-stone-400" };
 
-// --- COMPONENTES MODAIS (Simplificados para brevidade, lógica mantida) ---
+// --- MODAIS ---
+function StandardScheduleModal({ staff, currentShifts, locations, onClose, onSave }: any) {
+    const [selectedLocation, setSelectedLocation] = useState(locations[0]?.id || "");
+    const [schedule, setSchedule] = useState<any>({});
 
-// 1. Modal Turno
+    useEffect(() => {
+        if (!staff || !selectedLocation) return;
+        const newSchedule: any = {};
+        [1, 2, 3, 4, 5, 6, 7].forEach(day => {
+            const shift = currentShifts.find((s: StaffShift) => 
+                String(s.staff_id) === String(staff.id) && 
+                Number(s.weekday) === day &&
+                String(s.location_id || (s as any).location) === String(selectedLocation)
+            );
+            newSchedule[day] = {
+                active: !!shift,
+                start: shift ? shift.start_time.substring(0, 5) : '09:00',
+                end: shift ? shift.end_time.substring(0, 5) : '18:00',
+                id: shift?.id 
+            };
+        });
+        setSchedule(newSchedule);
+    }, [staff, currentShifts, selectedLocation]);
+
+    if (!staff) return null;
+
+    const handleSave = () => {
+        const shiftsToSave: ShiftPayload[] = [];
+        const shiftsToDelete: number[] = [];
+        Object.keys(schedule).forEach(dayStr => {
+            const day = parseInt(dayStr);
+            const item = schedule[day];
+            if (item.active) {
+                shiftsToSave.push({ id: item.id, staff: staff.id, location: selectedLocation, weekday: day, start_time: `${item.start}:00`, end_time: `${item.end}:00` });
+            } else if (item.id) {
+                shiftsToDelete.push(item.id);
+            }
+        });
+        onSave(shiftsToSave, shiftsToDelete);
+    };
+
+    const weekDaysMap = { 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex', 6: 'Sáb', 7: 'Dom' };
+
+    return (
+        <Dialog open={!!staff} onOpenChange={onClose}>
+            <DialogContent className="sm:max-w-[500px] bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800 w-[95vw]">
+                <DialogHeader><DialogTitle>Escala Padrão: {staff.name}</DialogTitle><p className="text-xs text-stone-500">Defina os dias e horários para a unidade selecionada.</p></DialogHeader>
+                <div className="py-4 space-y-4">
+                    <div className="space-y-1"><Label>Unidade de Trabalho</Label><Select value={selectedLocation} onValueChange={setSelectedLocation}><SelectTrigger className="bg-stone-50"><SelectValue/></SelectTrigger><SelectContent>{locations.map((l:any) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}</SelectContent></Select></div>
+                    <div className="border rounded-lg divide-y divide-stone-100 max-h-[350px] overflow-y-auto">{[1, 2, 3, 4, 5, 6, 7].map((day) => (<div key={day} className="flex items-center justify-between p-3 hover:bg-stone-50 transition-colors"><div className="flex items-center gap-3 w-24"><Switch checked={schedule[day]?.active || false} onCheckedChange={(c) => setSchedule((prev:any) => ({...prev, [day]: {...prev[day], active: c}}))} className="data-[state=checked]:bg-[#C6A87C]"/><span className={`text-sm font-medium ${schedule[day]?.active ? 'text-stone-800' : 'text-stone-400'}`}>{weekDaysMap[day as keyof typeof weekDaysMap]}</span></div>{schedule[day]?.active ? (<div className="flex items-center gap-2"><Input type="time" className="h-8 w-20 text-xs bg-white border-stone-200" value={schedule[day]?.start} onChange={e => setSchedule((prev:any) => ({...prev, [day]: {...prev[day], start: e.target.value}}))}/><span className="text-stone-400 text-xs">até</span><Input type="time" className="h-8 w-20 text-xs bg-white border-stone-200" value={schedule[day]?.end} onChange={e => setSchedule((prev:any) => ({...prev, [day]: {...prev[day], end: e.target.value}}))}/></div>) : (<span className="text-xs text-stone-300 italic pr-4">Folga</span>)}</div>))}</div>
+                </div>
+                <DialogFooter><Button variant="outline" onClick={onClose}>Cancelar</Button><Button onClick={handleSave} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Salvar Escala</Button></DialogFooter>
+            </DialogContent>
+        </Dialog>
+    );
+}
+
 function ShiftEditModal({ shiftData, allStaff, allLocations, onClose, onSave, onDelete, isSaving, isDeleting }: any) { 
   const isEditing = !!shiftData?.id; 
-  const [startTime, setStartTime] = useState(shiftData?.start_time.substring(0, 5) || '09:00'); 
-  const [endTime, setEndTime] = useState(shiftData?.end_time.substring(0, 5) || '18:00'); 
-  const [selectedLocationId, setSelectedLocationId] = useState(shiftData?.location_id || allLocations[0]?.id || ''); 
-  const [selectedStaffId, setSelectedStaffId] = useState(shiftData?.staff_id || '');
-
-  useEffect(() => { 
-    setStartTime(shiftData?.start_time.substring(0, 5) || '09:00'); 
-    setEndTime(shiftData?.end_time.substring(0, 5) || '18:00'); 
-    setSelectedLocationId(shiftData?.location_id || allLocations[0]?.id || ''); 
-    setSelectedStaffId(shiftData?.staff_id || (allStaff.length > 0 ? allStaff[0].id : ''));
-  }, [shiftData, allLocations, allStaff]); 
-  
+  const [startTime, setStartTime] = useState(shiftData?.start_time ? shiftData.start_time.substring(0, 5) : '09:00'); 
+  const [endTime, setEndTime] = useState(shiftData?.end_time ? shiftData.end_time.substring(0, 5) : '18:00'); 
+  const initialLocation = shiftData?.location_id || shiftData?.location || (allLocations.length > 0 ? allLocations[0].id : '');
+  const initialStaff = shiftData?.staff_id || shiftData?.staff || (allStaff.length > 0 ? allStaff[0].id : '');
+  const [selectedLocationId, setSelectedLocationId] = useState(initialLocation); 
+  const [selectedStaffId, setSelectedStaffId] = useState(initialStaff);
+  useEffect(() => { if(shiftData) { setStartTime(shiftData.start_time ? shiftData.start_time.substring(0, 5) : '09:00'); setEndTime(shiftData.end_time ? shiftData.end_time.substring(0, 5) : '18:00'); setSelectedLocationId(shiftData.location_id || shiftData.location || (allLocations.length > 0 ? allLocations[0].id : '')); setSelectedStaffId(shiftData.staff_id || shiftData.staff || (allStaff.length > 0 ? allStaff[0].id : '')); } }, [shiftData, allLocations, allStaff]); 
   if (!shiftData) return null; 
   const dayName = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][shiftData.weekday % 7]; 
-
+  const handleSave = () => { const payload: ShiftPayload = { staff: selectedStaffId, location: selectedLocationId, weekday: parseInt(shiftData.weekday), start_time: `${startTime}:00`, end_time: `${endTime}:00` }; if (isEditing) { payload.id = shiftData.id; } onSave(payload); };
   return (
-    <Dialog open={!!shiftData} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[400px] bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800">
-        <DialogHeader><DialogTitle className="text-stone-800 dark:text-stone-100">{isEditing ? 'Editar Turno' : 'Novo Turno'}</DialogTitle><div className="text-sm text-stone-500 capitalize">{dayName}</div></DialogHeader>
-        <div className="grid gap-4 py-4">
-          <div className="space-y-2"><Label>Profissional</Label><Select value={selectedStaffId} onValueChange={setSelectedStaffId} disabled={isSaving || isDeleting || isEditing}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue /></SelectTrigger><SelectContent>{allStaff.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div>
-          <div className="space-y-2"><Label>Unidade</Label><Select value={selectedLocationId} onValueChange={setSelectedLocationId} disabled={isSaving || isDeleting}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue /></SelectTrigger><SelectContent>{allLocations.map((loc: any) => (<SelectItem key={loc.id} value={loc.id}>{loc.name}</SelectItem>))}</SelectContent></Select></div>
-          <div className="grid grid-cols-2 gap-4"><div className="space-y-2"><Label>Início</Label><Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="bg-stone-50 dark:bg-stone-900" /></div><div className="space-y-2"><Label>Fim</Label><Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="bg-stone-50 dark:bg-stone-900" /></div></div>
-        </div>
-        <DialogFooter className="flex-col sm:flex-row gap-2">{isEditing && (<Button variant="ghost" onClick={() => { if(confirm("Excluir?")) onDelete(shiftData.id) }} className="text-red-500 mr-auto"><Trash2 className="w-4 h-4"/></Button>)}<Button variant="outline" onClick={onClose}>Cancelar</Button><Button onClick={() => onSave({ ...shiftData, staff_id: selectedStaffId, start_time: `${startTime}:00`, end_time: `${endTime}:00`, location_id: selectedLocationId })} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Salvar</Button></DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <Dialog open={!!shiftData} onOpenChange={onClose}><DialogContent className="sm:max-w-[400px] bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800"><DialogHeader><DialogTitle className="text-stone-800 dark:text-stone-100">{isEditing ? 'Editar Turno' : 'Novo Turno'}</DialogTitle><div className="text-sm text-stone-500 capitalize">{dayName}</div></DialogHeader><div className="grid gap-4 py-4"><div className="space-y-2"><Label>Profissional</Label><Select value={selectedStaffId} onValueChange={setSelectedStaffId} disabled={isSaving || isDeleting || isEditing}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue /></SelectTrigger><SelectContent>{allStaff.map((s: any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Unidade</Label><Select value={selectedLocationId} onValueChange={setSelectedLocationId} disabled={isSaving || isDeleting}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue /></SelectTrigger><SelectContent>{allLocations.map((loc: any) => (<SelectItem key={loc.id} value={loc.id}>{loc.name}</SelectItem>))}</SelectContent></Select></div><div className="grid grid-cols-2 gap-4"><div className="space-y-2"><Label>Início</Label><Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="bg-stone-50 dark:bg-stone-900" /></div><div className="space-y-2"><Label>Fim</Label><Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="bg-stone-50 dark:bg-stone-900" /></div></div></div><DialogFooter className="flex-col sm:flex-row gap-2">{isEditing && (<Button variant="ghost" onClick={() => { if(confirm("Excluir?")) onDelete(shiftData.id) }} className="text-red-500 mr-auto"><Trash2 className="w-4 h-4"/></Button>)}<Button variant="outline" onClick={onClose}>Cancelar</Button><Button onClick={handleSave} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Salvar</Button></DialogFooter></DialogContent></Dialog>
   ); 
 }
 
-// 2. Modal Profissional
 function StaffDetailModal({ member, allServices, staffServices, onClose, onSave, isSaving }: any) { 
   const [name, setName] = useState(''); const [role, setRole] = useState(''); const [active, setActive] = useState(true); const [commission, setCommission] = useState(0); const [selectedServices, setSelectedServices] = useState<string[]>([]); 
   useEffect(() => { if (member) { setName(member.name); setRole(member.role || ''); setActive(member.active ?? true); setCommission(member.default_commission_percentage ?? 0); setSelectedServices(staffServices.filter((ss: any) => ss.staff_id === member.id).map((ss: any) => ss.service_id)); } }, [member, staffServices]); 
   const handleSave = () => { if (!member) return; const originalIds = staffServices.filter((ss: any) => ss.staff_id === member.id).map((ss: any) => ss.service_id); onSave({ staffData: { id: member.id, name, role, active, default_commission_percentage: commission }, servicesToAdd: selectedServices.filter(id => !originalIds.includes(id)), servicesToRemove: originalIds.filter((id: any) => !selectedServices.includes(id)) }); }; 
   if (!member) return null; 
   return (
-    <Dialog open={!!member} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[600px] bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800">
-        <DialogHeader><DialogTitle className="text-stone-800 dark:text-stone-100">{member.id ? 'Editar' : 'Novo'} Profissional</DialogTitle></DialogHeader>
-        <div className="grid gap-6 py-4"><div className="grid grid-cols-2 gap-4"><div className="space-y-2"><Label>Nome</Label><Input value={name} onChange={(e) => setName(e.target.value)} className="bg-stone-50 dark:bg-stone-900" /></div><div className="space-y-2"><Label>Cargo</Label><Input value={role} onChange={(e) => setRole(e.target.value)} className="bg-stone-50 dark:bg-stone-900" /></div></div><div className="grid grid-cols-2 gap-4"><div className="space-y-2"><Label>Status</Label><Select value={active ? 'active' : 'inactive'} onValueChange={(v) => setActive(v === 'active')}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Ativo</SelectItem><SelectItem value="inactive">Inativo</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Comissão (%)</Label><Input type="number" value={commission} onChange={(e) => setCommission(parseFloat(e.target.value))} className="bg-stone-50 dark:bg-stone-900" /></div></div><div className="space-y-2"><Label>Serviços</Label><div className="flex flex-wrap gap-2 p-2 border rounded-lg bg-stone-50/50 max-h-32 overflow-y-auto">{allServices.map((s:any) => (<Button key={s.id} size="sm" variant={selectedServices.includes(s.id) ? "default" : "outline"} onClick={() => setSelectedServices(p => p.includes(s.id) ? p.filter(id => id !== s.id) : [...p, s.id])} className={`text-xs h-7 ${selectedServices.includes(s.id) ? "bg-[#C6A87C]" : ""}`}>{s.name}</Button>))}</div></div></div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Cancelar</Button><Button onClick={handleSave} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Salvar</Button></DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <Dialog open={!!member} onOpenChange={onClose}><DialogContent className="sm:max-w-[600px] bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800"><DialogHeader><DialogTitle className="text-stone-800 dark:text-stone-100">{member.id ? 'Editar' : 'Novo'} Profissional</DialogTitle></DialogHeader><div className="grid gap-6 py-4"><div className="grid grid-cols-2 gap-4"><div className="space-y-2"><Label>Nome</Label><Input value={name} onChange={(e) => setName(e.target.value)} className="bg-stone-50 dark:bg-stone-900" /></div><div className="space-y-2"><Label>Cargo</Label><Input value={role} onChange={(e) => setRole(e.target.value)} className="bg-stone-50 dark:bg-stone-900" /></div></div><div className="grid grid-cols-2 gap-4"><div className="space-y-2"><Label>Status</Label><Select value={active ? 'active' : 'inactive'} onValueChange={(v) => setActive(v === 'active')}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Ativo</SelectItem><SelectItem value="inactive">Inativo</SelectItem></SelectContent></Select></div><div className="space-y-2"><Label>Comissão (%)</Label><Input type="number" value={commission} onChange={(e) => setCommission(parseFloat(e.target.value))} className="bg-stone-50 dark:bg-stone-900" /></div></div><div className="space-y-2"><Label>Serviços</Label><div className="flex flex-wrap gap-2 p-2 border rounded-lg bg-stone-50/50 max-h-32 overflow-y-auto">{allServices.map((s:any) => (<Button key={s.id} size="sm" variant={selectedServices.includes(s.id) ? "default" : "outline"} onClick={() => setSelectedServices(p => p.includes(s.id) ? p.filter(id => id !== s.id) : [...p, s.id])} className={`text-xs h-7 ${selectedServices.includes(s.id) ? "bg-[#C6A87C]" : ""}`}>{s.name}</Button>))}</div></div></div><DialogFooter><Button variant="outline" onClick={onClose}>Cancelar</Button><Button onClick={handleSave} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Salvar</Button></DialogFooter></DialogContent></Dialog>
   ); 
 }
 
-// 3. Modal Folga
 function TimeOffModal({ staff }: { staff: StaffMember[] }) { 
   const [open, setOpen] = useState(false); const [formData, setFormData] = useState({ staff_id: "", start_date: format(new Date(), "yyyy-MM-dd"), end_date: format(new Date(), "yyyy-MM-dd"), type: "folga", notes: "" }); const queryClient = useQueryClient(); const mutation = useMutation({ mutationFn: (data: any) => staffExceptionsAPI.create(data), onSuccess: () => { toast.success("Registrado!"); setOpen(false); queryClient.invalidateQueries({ queryKey: ['staffExceptions'] }); } }); 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild><Button variant="outline" className="border-stone-200 text-stone-600 hover:text-[#C6A87C]"><Plus className="w-4 h-4 mr-2" />Nova Folga</Button></DialogTrigger>
-      <DialogContent className="bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800"><DialogHeader><DialogTitle>Registrar Ausência</DialogTitle></DialogHeader><div className="grid gap-4 py-4"><div><Label>Profissional</Label><Select onValueChange={(v) => setFormData({...formData, staff_id: v})}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue placeholder="Selecione" /></SelectTrigger><SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Tipo</Label><Select onValueChange={(v:any) => setFormData({...formData, type: v})} defaultValue="folga"><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="folga">Folga</SelectItem><SelectItem value="férias">Férias</SelectItem><SelectItem value="atestado">Atestado</SelectItem></SelectContent></Select></div><div className="grid grid-cols-2 gap-4"><div><Label>Início</Label><Input type="date" value={formData.start_date} onChange={(e) => setFormData({...formData, start_date: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div><div><Label>Fim</Label><Input type="date" value={formData.end_date} onChange={(e) => setFormData({...formData, end_date: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div></div><div className="space-y-2"><Label>Obs</Label><Textarea value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div></div><DialogFooter><Button onClick={() => mutation.mutate(formData)} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Salvar</Button></DialogFooter></DialogContent>
-    </Dialog>
+    <Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild><Button variant="outline" className="border-stone-200 text-stone-600 hover:text-[#C6A87C]"><Plus className="w-4 h-4 mr-2" />Nova Folga</Button></DialogTrigger><DialogContent className="bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800"><DialogHeader><DialogTitle>Registrar Ausência</DialogTitle></DialogHeader><div className="grid gap-4 py-4"><div><Label>Profissional</Label><Select onValueChange={(v) => setFormData({...formData, staff_id: v})}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue placeholder="Selecione" /></SelectTrigger><SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><Label>Tipo</Label><Select onValueChange={(v:any) => setFormData({...formData, type: v})} defaultValue="folga"><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="folga">Folga</SelectItem><SelectItem value="férias">Férias</SelectItem><SelectItem value="atestado">Atestado</SelectItem></SelectContent></Select></div><div className="grid grid-cols-2 gap-4"><div><Label>Início</Label><Input type="date" value={formData.start_date} onChange={(e) => setFormData({...formData, start_date: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div><div><Label>Fim</Label><Input type="date" value={formData.end_date} onChange={(e) => setFormData({...formData, end_date: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div></div><div className="space-y-2"><Label>Obs</Label><Textarea value={formData.notes} onChange={(e) => setFormData({...formData, notes: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div></div><DialogFooter><Button onClick={() => mutation.mutate(formData)} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Salvar</Button></DialogFooter></DialogContent></Dialog>
   ); 
 }
 
-// 4. Modal Comissão
+// 🔥 NOVO: Modal de Lançamento Avulso com PREVIEW
 function ManualCommissionModal({ staff, services }: { staff: StaffMember[]; services: Service[] }) { 
-  const [open, setOpen] = useState(false); const [formData, setFormData] = useState({ staff_id: "", service_id: "", date: format(new Date(), "yyyy-MM-dd"), service_price_centavos: 0, commission_percentage: 0 }); const queryClient = useQueryClient(); const mutation = useMutation({ mutationFn: (data: any) => staffCommissionsAPI.create({ ...data, commission_amount_centavos: (data.service_price_centavos * data.commission_percentage) / 100, status: "pendente_pagamento" }), onSuccess: () => { toast.success("Lançado!"); setOpen(false); queryClient.invalidateQueries({ queryKey: ['staffCommissions'] }); } }); 
+  const [open, setOpen] = useState(false); 
+  const [formData, setFormData] = useState({ 
+      staff: "", 
+      service: "", 
+      date: format(new Date(), "yyyy-MM-dd"), 
+      service_price_centavos: 0, 
+      commission_percentage: 0 
+  }); 
+  const queryClient = useQueryClient(); 
+  
+  const mutation = useMutation({ 
+      mutationFn: (data: any) => staffCommissionsAPI.create({ 
+          ...data, 
+          commission_amount_centavos: (data.service_price_centavos * data.commission_percentage) / 100, 
+          status: "pendente_pagamento" 
+      }), 
+      onSuccess: () => { 
+          toast.success("Lançado!"); 
+          setOpen(false); 
+          queryClient.invalidateQueries({ queryKey: ['staffCommissions'] }); 
+      } 
+  }); 
+
+  // Calcula comissão para mostrar em tempo real
+  const previewCommission = useMemo(() => {
+      const total = (formData.service_price_centavos * formData.commission_percentage) / 10000; // /100 da pct e /100 dos centavos
+      return total;
+  }, [formData.service_price_centavos, formData.commission_percentage]);
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild><Button variant="outline" className="border-stone-200 text-stone-600 hover:text-[#C6A87C]"><Plus className="w-4 h-4 mr-2" />Lançamento Manual</Button></DialogTrigger>
-      <DialogContent className="bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800"><DialogHeader><DialogTitle>Lançamento Avulso</DialogTitle></DialogHeader><div className="grid gap-4 py-4"><div className="grid grid-cols-2 gap-4"><div><Label>Profissional</Label><Select onValueChange={(v) => setFormData({...formData, staff_id: v})}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue placeholder="Selecione" /></SelectTrigger><SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div><div><Label>Serviço</Label><Select onValueChange={(v) => setFormData({...formData, service_id: v})}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue placeholder="Opcional" /></SelectTrigger><SelectContent>{services.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div></div><div className="grid grid-cols-2 gap-4"><div><Label>Valor Base</Label><Input type="number" onChange={(e) => setFormData({...formData, service_price_centavos: parseFloat(e.target.value) * 100})} className="bg-stone-50 dark:bg-stone-900" /></div><div><Label>Comissão %</Label><Input type="number" onChange={(e) => setFormData({...formData, commission_percentage: parseFloat(e.target.value)})} className="bg-stone-50 dark:bg-stone-900" /></div></div><div className="space-y-2"><Label>Data</Label><Input type="date" value={formData.date} onChange={(e) => setFormData({...formData, date: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div></div><DialogFooter><Button onClick={() => mutation.mutate(formData)} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Lançar</Button></DialogFooter></DialogContent>
+      <DialogContent className="bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800"><DialogHeader><DialogTitle>Lançamento Avulso</DialogTitle></DialogHeader>
+        <div className="grid gap-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+                <div><Label>Profissional</Label><Select onValueChange={(v) => setFormData({...formData, staff: v})}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue placeholder="Selecione" /></SelectTrigger><SelectContent>{staff.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div>
+                <div><Label>Serviço</Label><Select onValueChange={(v) => setFormData({...formData, service: v})}><SelectTrigger className="bg-stone-50 dark:bg-stone-900"><SelectValue placeholder="Opcional" /></SelectTrigger><SelectContent>{services.map(s => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent></Select></div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+                <div><Label>Valor Base (R$)</Label><Input type="number" onChange={(e) => setFormData({...formData, service_price_centavos: parseFloat(e.target.value) * 100})} className="bg-stone-50 dark:bg-stone-900" /></div>
+                <div><Label>Comissão %</Label><Input type="number" onChange={(e) => setFormData({...formData, commission_percentage: parseFloat(e.target.value)})} className="bg-stone-50 dark:bg-stone-900" /></div>
+            </div>
+            <div className="space-y-2"><Label>Data</Label><Input type="date" value={formData.date} onChange={(e) => setFormData({...formData, date: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div>
+            
+            {/* 🔥 PREVIEW DO CÁLCULO */}
+            <div className="bg-stone-100 p-3 rounded-lg flex justify-between items-center mt-2 border border-stone-200">
+                <span className="text-sm text-stone-600 flex items-center gap-2"><Calculator className="w-4 h-4"/> Comissão Prevista:</span>
+                <span className="text-lg font-bold text-[#C6A87C]">R$ {previewCommission.toFixed(2)}</span>
+            </div>
+        </div>
+        <DialogFooter><Button onClick={() => mutation.mutate(formData)} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">Lançar</Button></DialogFooter></DialogContent>
     </Dialog>
   ); 
 }
@@ -174,19 +259,21 @@ export default function Staff() {
   const [, navigate] = useLocation();
 
   // Estados
-  const [activeTab, setActiveTab] = useState('team'); // Opções: 'team', 'schedule', 'timeoff', 'commissions'
+  const [activeTab, setActiveTab] = useState('team'); 
   const [currentWeek, setCurrentWeek] = useState(new Date());
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [scheduleView, setScheduleView] = useState<"week" | "month">("week");
+  const [scheduleView, setScheduleView] = useState<"week" | "month">("month"); // Padrão Mensal
   const [selectedLocation, setSelectedLocation] = useState<string>("");
+  const [selectedDay, setSelectedDay] = useState(new Date()); 
   
   // Filtros
   const [exceptionStatusFilter, setExceptionStatusFilter] = useState<string>("pendente");
   const [commissionMonthFilter, setCommissionMonthFilter] = useState(format(new Date(), 'yyyy-MM'));
   const [commissionStatusFilter, setCommissionStatusFilter] = useState("all");
 
-  const [editingShiftData, setEditingShiftData] = useState<ShiftPayload | null>(null);
+  const [editingShiftData, setEditingShiftData] = useState<any | null>(null);
   const [editingStaffMember, setEditingStaffMember] = useState<StaffMember | null>(null);
+  const [schedulingStaffMember, setSchedulingStaffMember] = useState<StaffMember | null>(null); // Para o novo modal de escala
 
   // Queries
   const { data: rawStaff = [], isLoading: isLoadingStaff } = useQuery<any[]>({ queryKey: ['staff'], queryFn: staffAPI.getAll });
@@ -224,11 +311,19 @@ export default function Staff() {
 
   const activeStaff = useMemo(() => staffWithDetails.filter(s => s.active), [staffWithDetails]);
 
+  // Filtro de Staff
   const filteredStaff = useMemo(() => {
-    if (!selectedLocation) return staffWithDetails;
-    const locationName = locations.find(l => l.id === selectedLocation)?.name;
-    return staffWithDetails.filter(s => s.work_locations.includes(locationName || ''));
-  }, [staffWithDetails, selectedLocation, locations]);
+    if (!selectedLocation || selectedLocation === ALL_LOCATIONS_VALUE) return staffWithDetails;
+    const staffIdsAtLocation = new Set(
+        staffShifts
+            .filter(s => {
+                const shiftLoc = s.location_id || (s as any).location;
+                return String(shiftLoc) === String(selectedLocation);
+            })
+            .map(s => s.staff_id)
+    );
+    return staffWithDetails.filter(s => staffIdsAtLocation.has(s.id));
+  }, [staffWithDetails, selectedLocation, staffShifts]);
 
   const filteredExceptions = useMemo(() => exceptions.filter(exc => { 
     const matchStatus = exceptionStatusFilter === 'all' || exc.status === exceptionStatusFilter; 
@@ -253,7 +348,48 @@ export default function Staff() {
   // Mutations
   const saveShift = useMutation({ mutationFn: (payload: ShiftPayload) => payload.id ? staffShiftsAPI.update(payload.id, payload) : staffShiftsAPI.create(payload), onSuccess: () => { toast.success("Turno salvo!"); setEditingShiftData(null); queryClient.invalidateQueries({ queryKey: ['staffShifts'] }); } });
   const deleteShift = useMutation({ mutationFn: (id: number) => staffShiftsAPI.delete(id), onSuccess: () => { toast.success("Turno removido."); setEditingShiftData(null); queryClient.invalidateQueries({ queryKey: ['staffShifts'] }); } });
-  const saveStaffDetails = useMutation({ mutationFn: async ({ staffData, servicesToAdd, servicesToRemove }: any) => { const isNew = !editingStaffMember?.id; let staffId = editingStaffMember?.id; if (isNew) { const { id, ...createData } = staffData; const newStaff = await staffAPI.create(createData); staffId = newStaff.id; } else { if(staffId) await staffAPI.update(staffId as string, staffData); } if (staffId) { await Promise.all([...servicesToAdd.map((sid: string) => staffServicesAPI.create({ staff: staffId, service: sid })), ...servicesToRemove.map((sid: string) => staffServicesAPI.delete(`delete-by-params/?staff_id=${staffId}&service_id=${sid}`))]); } return staffId; }, onSuccess: () => { toast.success("Salvo com sucesso!"); setEditingStaffMember(null); queryClient.invalidateQueries({ queryKey: ['staff'] }); queryClient.invalidateQueries({ queryKey: ['staffServices'] }); } });
+  
+  const saveStaffDetails = useMutation({ 
+    mutationFn: async ({ staffData, servicesToAdd, servicesToRemove }: any) => { 
+      const isNew = !editingStaffMember?.id; 
+      let staffId = editingStaffMember?.id; 
+      if (isNew) { 
+        const { id, ...createData } = staffData; 
+        const newStaff = await staffAPI.create(createData); 
+        staffId = newStaff.id; 
+      } else { 
+        if(staffId) await staffAPI.update(staffId as string, staffData); 
+      } 
+      if (staffId) { 
+        await Promise.all([
+          ...servicesToAdd.map((sid: string) => staffServicesAPI.create({ staff: staffId, service: sid })), 
+          ...servicesToRemove.map((sid: string) => staffServicesAPI.delete(`delete-by-params/?staff_id=${staffId}&service_id=${sid}`))
+        ]); 
+      } 
+      return staffId; 
+    }, 
+    onSuccess: () => { toast.success("Salvo com sucesso!"); setEditingStaffMember(null); queryClient.invalidateQueries({ queryKey: ['staff'] }); queryClient.invalidateQueries({ queryKey: ['staffServices'] }); } 
+  });
+
+  const saveStandardSchedule = useMutation({
+      mutationFn: async ({ shiftsToSave, shiftsToDelete }: any) => {
+          if (shiftsToDelete.length > 0) {
+              await Promise.all(shiftsToDelete.map((id: number) => staffShiftsAPI.delete(id)));
+          }
+          if (shiftsToSave.length > 0) {
+              await Promise.all(shiftsToSave.map((shift: ShiftPayload) => {
+                  if (shift.id) return staffShiftsAPI.update(shift.id, shift);
+                  return staffShiftsAPI.create(shift);
+              }));
+          }
+      },
+      onSuccess: () => {
+          toast.success("Escala atualizada!");
+          setSchedulingStaffMember(null);
+          queryClient.invalidateQueries({ queryKey: ['staffShifts'] });
+      }
+  });
+
   const deleteException = useMutation({ mutationFn: (id: string) => staffExceptionsAPI.delete(id), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['staffExceptions'] }); toast.success("Removido!"); } });
   const updateExceptionStatus = useMutation({ mutationFn: ({ id, status }: any) => staffExceptionsAPI.update(id, { status }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['staffExceptions'] }); toast.success("Atualizado!"); } });
   const deleteCommission = useMutation({ mutationFn: (id: string) => staffCommissionsAPI.delete(id), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['staffCommissions'] }); toast.success("Excluído!"); } });
@@ -263,6 +399,22 @@ export default function Staff() {
   const handleCommissionMonthChange = (direction: 'next' | 'prev') => { const currentDate = new Date(commissionMonthFilter + '-02T12:00:00'); const newDate = direction === 'prev' ? subMonths(currentDate, 1) : addMonths(currentDate, 1); setCommissionMonthFilter(format(newDate, 'yyyy-MM')); };
   const getStaffStatusForToday = (member: StaffMember) => { const today = new Date(); const timeOff = hasTimeOffOnDate(member.id, today, exceptions); if (timeOff) return <span className="font-medium text-amber-600">Ausente: {timeOff.type}</span>; const todayShifts = getSchedulesForStaffAndDay(member.id, today.getDay(), staffShifts, selectedLocation); if (todayShifts.length > 0) { const shift = todayShifts[0]; return <span className="text-emerald-600 font-medium">Trabalhando: {shift.start_time.substring(0, 5)} - {shift.end_time.substring(0, 5)}</span>; } return <span className="text-stone-400">Folga</span>; };
 
+  // Helper para o Modal de Lista do Dia (Mobile e Desktop)
+  const getStaffListForDay = (date: Date) => {
+      return filteredStaff.filter(member => {
+          // Passa a location selecionada para filtrar
+          const shifts = getSchedulesForStaffAndDay(member.id, date.getDay(), staffShifts, selectedLocation);
+          const off = hasTimeOffOnDate(member.id, date, exceptions);
+          return shifts.length > 0 || off;
+      }).map(member => {
+          const shifts = getSchedulesForStaffAndDay(member.id, date.getDay(), staffShifts, selectedLocation);
+          const off = hasTimeOffOnDate(member.id, date, exceptions);
+          return { member, shifts, off };
+      });
+  };
+
+  const selectedDayStaffList = getStaffListForDay(selectedDay);
+
   if (isLoadingStaff) return <div className="p-20 text-center text-stone-400">Carregando equipe...</div>;
 
   return (
@@ -271,6 +423,15 @@ export default function Staff() {
       {/* Modais Globais */}
       <ShiftEditModal shiftData={editingShiftData} staffName={editingShiftData ? getStaffName(editingShiftData.staff_id) : ''} allStaff={rawStaff} allLocations={locations} onClose={() => setEditingShiftData(null)} onSave={saveShift.mutate} onDelete={deleteShift.mutate} isSaving={saveShift.isPending} />
       <StaffDetailModal member={editingStaffMember} allServices={services} staffServices={staffServices} onClose={() => setEditingStaffMember(null)} onSave={saveStaffDetails.mutate} isSaving={saveStaffDetails.isPending} />
+      
+      {/* 🔥 NOVO: Modal de Configuração de Escala Padrão */}
+      <StandardScheduleModal 
+          staff={schedulingStaffMember} 
+          currentShifts={staffShifts} 
+          locations={locations} 
+          onClose={() => setSchedulingStaffMember(null)}
+          onSave={(toSave: any, toDelete: any) => saveStandardSchedule.mutate({ shiftsToSave: toSave, shiftsToDelete: toDelete })}
+      />
 
       {/* Cabeçalho */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -290,7 +451,7 @@ export default function Staff() {
         </Button>
       </div>
 
-      {/* --- MENU DE NAVEGAÇÃO "CLEAN" --- */}
+      {/* --- MENU DE NAVEGAÇÃO --- */}
       <nav className="flex overflow-x-auto pb-2 gap-2 border-b border-stone-200 dark:border-stone-800">
          <Button variant={activeTab === 'team' ? 'secondary' : 'ghost'} onClick={() => setActiveTab('team')} className={`rounded-full px-5 text-sm ${activeTab === 'team' ? 'bg-[#C6A87C]/10 text-[#C6A87C] hover:bg-[#C6A87C]/20' : 'text-stone-500 hover:text-stone-700'}`}>
             <Users className="w-4 h-4 mr-2" /> Equipe
@@ -358,9 +519,15 @@ export default function Staff() {
                      <Clock className="w-3 h-3 text-[#C6A87C]" />
                      {getStaffStatusForToday(s)}
                   </div>
-                  <Button variant="outline" size="sm" className="w-full mt-2 border-stone-200 text-stone-600 hover:text-[#C6A87C] hover:border-[#C6A87C]" onClick={() => setEditingStaffMember(s)}>
-                     <Pencil className="w-3 h-3 mr-2" /> Editar Detalhes
-                  </Button>
+                  
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                      <Button variant="outline" size="sm" className="w-full border-stone-200 text-stone-600 hover:text-[#C6A87C]" onClick={() => setEditingStaffMember(s)}>
+                         <Pencil className="w-3 h-3 mr-2" /> Editar
+                      </Button>
+                      <Button variant="outline" size="sm" className="w-full border-stone-200 text-stone-600 hover:text-[#C6A87C]" onClick={() => setSchedulingStaffMember(s)}>
+                         <CalendarDays className="w-3 h-3 mr-2" /> Escala
+                      </Button>
+                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -368,22 +535,18 @@ export default function Staff() {
         </div>
       )}
 
-      {/* 2. ESCALA */}
+      {/* 2. ESCALA (CALENDÁRIO COM BOLINHAS E LISTA) */}
       {activeTab === 'schedule' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
           <div className="flex flex-col md:flex-row justify-between gap-4 items-center bg-white dark:bg-stone-900 p-3 rounded-xl border border-stone-100 dark:border-stone-800 shadow-sm">
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="icon" onClick={() => setCurrentWeek(scheduleView === "week" ? subWeeks(currentWeek, 1) : subMonths(currentMonth, 1))} className="h-8 w-8"><ChevronLeft className="h-4 w-4" /></Button>
+              <Button variant="outline" size="icon" onClick={() => setCurrentMonth(subMonths(currentMonth, 1))} className="h-8 w-8"><ChevronLeft className="h-4 w-4" /></Button>
               <span className="text-sm font-medium text-stone-700 dark:text-stone-200 min-w-[150px] text-center capitalize">
-                {scheduleView === "week" ? `${format(startOfWeek(currentWeek, { locale: ptBR }), "dd MMM")} - ${format(addDays(startOfWeek(currentWeek, { locale: ptBR }), 6), "dd MMM", { locale: ptBR })}` : format(currentMonth, "MMMM yyyy", { locale: ptBR })}
+                {format(currentMonth, "MMMM yyyy", { locale: ptBR })}
               </span>
-              <Button variant="outline" size="icon" onClick={() => setCurrentWeek(scheduleView === "week" ? addWeeks(currentWeek, 1) : addMonths(currentMonth, 1))} className="h-8 w-8"><ChevronRight className="h-4 w-4" /></Button>
+              <Button variant="outline" size="icon" onClick={() => setCurrentMonth(addMonths(currentMonth, 1))} className="h-8 w-8"><ChevronRight className="h-4 w-4" /></Button>
             </div>
             <div className="flex gap-2">
-              <Select value={scheduleView} onValueChange={(v: any) => setScheduleView(v)}>
-                <SelectTrigger className="w-32 bg-stone-50 dark:bg-stone-950 border-stone-200"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="week">Semanal</SelectItem><SelectItem value="month">Mensal</SelectItem></SelectContent>
-              </Select>
               <Select value={selectedLocation || ALL_LOCATIONS_VALUE} onValueChange={(v) => setSelectedLocation(v === ALL_LOCATIONS_VALUE ? "" : v)}>
                 <SelectTrigger className="w-48 bg-stone-50 dark:bg-stone-950 border-stone-200"><SelectValue placeholder="Todas" /></SelectTrigger>
                 <SelectContent>
@@ -394,129 +557,130 @@ export default function Staff() {
             </div>
           </div>
 
-          <Card className="border-stone-100 dark:border-stone-800 shadow-sm overflow-hidden bg-white dark:bg-stone-900">
-            {scheduleView === "week" && (
-              <>
-                <div className="hidden md:block overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-stone-50 dark:bg-stone-950 hover:bg-stone-50">
-                        <TableHead className="w-[180px] font-bold text-stone-700">Profissional</TableHead>
-                        {weekDays.map((day, idx) => (
-                          <TableHead key={idx} className="text-center min-w-[100px]">
-                            <div className="text-stone-700 font-bold capitalize">{format(day, "EEE", { locale: ptBR })}</div>
-                            <div className="text-[10px] text-stone-400 font-normal">{format(day, "dd/MM")}</div>
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredStaff.map(member => (
-                        <TableRow key={member.id} className="hover:bg-stone-50/50 dark:hover:bg-stone-800/50">
-                          <TableCell className="font-medium">
-                            <div className="text-sm text-stone-800 dark:text-stone-200">{member.name}</div>
-                            <div className="text-[10px] text-stone-400">{member.role}</div>
-                          </TableCell>
-                          {weekDays.map((day, idx) => {
-                            const shifts = getSchedulesForStaffAndDay(member.id, day.getDay(), staffShifts, selectedLocation);
-                            const off = hasTimeOffOnDate(member.id, day, exceptions);
-                            return (
-                              <TableCell key={idx} className="p-2 text-center align-top">
-                                {off ? (
-                                  <Badge variant="secondary" className={`${timeOffTypeColors[off.type]} text-white text-[10px] w-full justify-center py-1`}>{off.type}</Badge>
-                                ) : (
-                                  <div className="space-y-1">
-                                    {shifts.map((shift, i) => (
-                                      <div key={i} onClick={() => { if(member.active) setEditingShiftData({...shift, staff_id: member.id, weekday: day.getDay() === 0 ? 7 : day.getDay()}) }} 
-                                           className="bg-[#C6A87C]/10 text-[#C6A87C] border border-[#C6A87C]/20 px-1 py-1 rounded text-[10px] cursor-pointer hover:bg-[#C6A87C]/20 transition-colors">
-                                        {shift.start_time.slice(0,5)}-{shift.end_time.slice(0,5)}
-                                      </div>
-                                    ))}
-                                    {member.active && (
-                                      <Button variant="ghost" size="icon" className="h-5 w-full text-stone-300 hover:text-[#C6A87C] hover:bg-stone-50" 
-                                        onClick={() => setEditingShiftData({ staff_id: member.id, location_id: locations[0]?.id, weekday: day.getDay() === 0 ? 7 : day.getDay(), start_time: '09:00:00', end_time: '18:00:00' })}>
-                                        <Plus className="w-3 h-3" />
-                                      </Button>
-                                    )}
-                                  </div>
-                                )}
-                              </TableCell>
-                            );
-                          })}
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-                <div className="md:hidden space-y-4 p-4 bg-stone-50/50">
-                  {weekDays.map((day, idx) => (
-                    <Card key={idx} className="border-stone-100 shadow-sm">
-                      <CardHeader className="py-3 bg-stone-50 border-b border-stone-100">
-                        <CardTitle className="text-sm text-stone-700 flex justify-between items-center">
-                          <span className="capitalize">{format(day, "EEEE", { locale: ptBR })}</span>
-                          <span className="text-xs font-normal text-stone-400">{format(day, "dd/MM")}</span>
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent className="p-0">
-                        {filteredStaff.map(member => {
-                          const shifts = getSchedulesForStaffAndDay(member.id, day.getDay(), staffShifts, selectedLocation);
-                          const off = hasTimeOffOnDate(member.id, day, exceptions);
-                          if (!shifts.length && !off) return null; 
-                          return (
-                            <div key={member.id} className="flex justify-between items-center p-3 border-b border-stone-50 last:border-0 text-sm">
-                              <span className="font-medium text-stone-700 w-1/3">{member.name}</span>
-                              <div className="flex-1 text-right">
-                                {off ? (
-                                  <Badge className={`${timeOffTypeColors[off.type]} text-white text-[10px]`}>{off.type}</Badge>
-                                ) : (
-                                  <div className="flex flex-col gap-1 items-end">
-                                    {shifts.map((shift, i) => (
-                                      <div key={i} onClick={() => setEditingShiftData({...shift, staff_id: member.id, weekday: day.getDay() === 0 ? 7 : day.getDay()})} 
-                                           className="bg-[#C6A87C]/10 text-[#C6A87C] px-2 py-1 rounded text-xs cursor-pointer border border-[#C6A87C]/20">
-                                        {shift.start_time.slice(0,5)} - {shift.end_time.slice(0,5)}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                        <div className="p-2 text-center border-t border-stone-50">
-                           <Button variant="ghost" size="sm" className="text-xs text-stone-400 hover:text-[#C6A87C]" onClick={() => setEditingShiftData({ staff_id: activeStaff.length > 0 ? activeStaff[0].id : '', location_id: locations[0]?.id, weekday: day.getDay() === 0 ? 7 : day.getDay(), start_time: '09:00:00', end_time: '18:00:00' })}>+ Adicionar Turno</Button>
+          <div className="flex flex-col h-full space-y-4 w-full">
+            <Card className="p-2 md:p-4 border-stone-100 shadow-sm bg-white w-full">
+                
+                {/* Grade de Dias (Mensal com Bolinhas) */}
+                <div className="w-full overflow-x-auto">
+                    <div className="min-w-[320px] md:min-w-full">
+                        <div className="grid grid-cols-7 mb-1">
+                            {["D", "S", "T", "Q", "Q", "S", "S"].map((day, i) => (
+                                <div key={i} className="text-center text-[10px] md:text-xs font-semibold text-stone-400 uppercase py-1">{day}</div>
+                            ))}
                         </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </>
-            )}
-            {scheduleView === "month" && (
-                <div className="p-4">
-                  <div className="grid grid-cols-7 gap-1">
-                    {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => (<div key={day} className="text-center text-xs font-semibold text-stone-500 uppercase p-2">{day}</div>))}
-                    {monthDays.map((day, idx) => {
-                      const isCurrentMonth = isSameMonth(day, currentMonth);
-                      const isTodayDate = isToday(day);
-                      const staffWorking = filteredStaff.filter(member => {
-                        const shifts = getSchedulesForStaffAndDay(member.id, day.getDay(), staffShifts, selectedLocation);
-                        const off = hasTimeOffOnDate(member.id, day, exceptions);
-                        return shifts.length > 0 && !off;
-                      });
-                      return (
-                        <div key={idx} className={`border rounded p-1 min-h-[80px] flex flex-col ${isCurrentMonth ? 'bg-white' : 'bg-stone-50/50'}`}>
-                          <div className="flex justify-end mb-1"><span className={`w-6 h-6 flex items-center justify-center rounded-full text-xs font-medium ${isTodayDate ? 'bg-[#C6A87C] text-white' : 'text-stone-500'}`}>{format(day, "d")}</span></div>
-                          <div className="space-y-1 overflow-y-auto max-h-[60px]">
-                            {staffWorking.slice(0, 3).map(s => (<div key={s.id} className="text-[10px] bg-stone-100 text-stone-600 px-1 rounded truncate">{s.name.split(' ')[0]}</div>))}
-                            {staffWorking.length > 3 && (<div className="text-[9px] text-stone-400 pl-1">+{staffWorking.length - 3}</div>)}
-                          </div>
+
+                        <div className="grid grid-cols-7 gap-px bg-stone-100 border border-stone-200 rounded-lg overflow-hidden w-full">
+                            {monthDays.map((day, idx) => {
+                                const isCurrentMonth = isSameMonth(day, currentMonth);
+                                const isSelected = isSameDay(day, selectedDay);
+                                const isTodayDate = isToday(day);
+                                
+                                const staffWorking = filteredStaff.filter(member => {
+                                    const shifts = getSchedulesForStaffAndDay(member.id, day.getDay(), staffShifts, selectedLocation);
+                                    const off = hasTimeOffOnDate(member.id, day, exceptions);
+                                    return shifts.length > 0 && !off;
+                                });
+                                
+                                const staffOff = filteredStaff.map(m => {
+                                    const off = hasTimeOffOnDate(m.id, day, exceptions);
+                                    return off ? { ...m, offType: off.type } : null;
+                                }).filter(Boolean);
+
+                                return (
+                                    <div
+                                        key={day.toString()}
+                                        onClick={() => setSelectedDay(day)}
+                                        className={`
+                                            relative flex flex-col items-center md:items-stretch
+                                            min-h-[45px] md:min-h-[90px] p-0.5 md:p-1 cursor-pointer transition-all
+                                            ${!isCurrentMonth ? "bg-stone-50/50 text-stone-300" : "bg-white text-stone-700"}
+                                            ${isSelected ? "bg-stone-100 ring-1 ring-inset ring-[#C6A87C]" : "hover:bg-stone-50"}
+                                        `}
+                                    >
+                                        <div className={`
+                                            w-6 h-6 md:w-auto md:h-auto flex items-center justify-center rounded-full text-xs md:text-[10px] font-medium mb-0.5
+                                            md:justify-end md:items-start md:rounded-none md:mb-0
+                                            ${isSelected ? "bg-[#C6A87C] text-white md:bg-transparent md:text-[#C6A87C] md:font-bold" : ""}
+                                            ${isTodayDate && !isSelected ? "text-[#C6A87C] font-bold" : ""}
+                                        `}>
+                                            <span>{format(day, "d")}</span>
+                                        </div>
+
+                                        {/* 🔥 BOLINHAS INDICADORAS */}
+                                        <div className="flex flex-wrap justify-center md:justify-start content-start gap-1 mt-1 px-1">
+                                            {staffWorking.map(s => (
+                                                <div key={s.id} className="w-1.5 h-1.5 rounded-full bg-[#C6A87C]" title={`${s.name}: Trabalhando`} />
+                                            ))}
+                                            {staffOff.map((s: any) => (
+                                                <div key={s.id} className={`w-1.5 h-1.5 rounded-full ${timeOffTypeColors[s.offType] || 'bg-gray-400'}`} title={`${s.name}: ${s.offType}`} />
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })}
                         </div>
-                      );
-                    })}
-                  </div>
+                    </div>
                 </div>
-            )}
-          </Card>
+            </Card>
+
+            {/* --- BLOCO 2: LISTA DE EQUIPE NO DIA (FIXO ABAIXO DO CALENDÁRIO) --- */}
+            <div className="flex-1 animate-in slide-in-from-bottom-4 duration-500 pb-20">
+                <div className="bg-stone-50/50 rounded-lg p-3 min-h-[100px] border border-stone-100">
+                    <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-3 px-1 flex justify-between items-center">
+                        <span>{isToday(selectedDay) ? "Hoje" : format(selectedDay, "EEEE, d 'de' MMMM", { locale: ptBR })}</span>
+                        <Badge variant="outline" className="text-[10px] font-normal">{selectedDayStaffList.length} pessoas</Badge>
+                    </h3>
+
+                    {selectedDayStaffList.length > 0 ? (
+                        <div className="space-y-2">
+                            {selectedDayStaffList.map(({ member, shifts, off }) => (
+                                <div key={member.id} className="bg-white p-3 rounded-xl shadow-sm border border-stone-100 flex justify-between items-center">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-stone-100 flex items-center justify-center font-bold text-xs text-stone-500">
+                                            {member.name.charAt(0)}
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-bold text-stone-700">{member.name}</p>
+                                            <p className="text-[10px] text-stone-400">{member.role}</p>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="text-right">
+                                        {off ? (
+                                            <Badge className={`${timeOffTypeColors[off.type]} text-white text-[10px]`}>{off.type}</Badge>
+                                        ) : (
+                                            <div className="flex flex-col gap-1 items-end">
+                                                {shifts.map((shift, i) => (
+                                                    <div 
+                                                        key={i} 
+                                                        onClick={() => setEditingShiftData({...shift, staff_id: member.id, weekday: selectedDay.getDay() === 0 ? 7 : selectedDay.getDay()})}
+                                                        className="bg-[#C6A87C]/10 text-[#C6A87C] px-2 py-1 rounded text-xs cursor-pointer border border-[#C6A87C]/20 hover:bg-[#C6A87C]/20 transition-colors"
+                                                    >
+                                                        {shift.start_time.slice(0,5)} - {shift.end_time.slice(0,5)}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center h-24 text-stone-400">
+                            <Umbrella className="w-6 h-6 mb-2 opacity-20" />
+                            <p className="text-xs">Ninguém escalado.</p>
+                            <Button 
+                                variant="ghost" 
+                                className="text-[#C6A87C] text-xs h-auto p-0 mt-1 hover:bg-transparent hover:underline"
+                                onClick={() => setEditingShiftData({ staff_id: activeStaff.length > 0 ? activeStaff[0].id : '', location_id: locations[0]?.id, weekday: selectedDay.getDay() === 0 ? 7 : selectedDay.getDay(), start_time: '09:00:00', end_time: '18:00:00' })}
+                            >
+                                + Adicionar turno
+                            </Button>
+                        </div>
+                    )}
+                </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -555,11 +719,9 @@ export default function Staff() {
         </div>
       )}
 
-      {/* 4. FINANCEIRO (COMISSÕES) */}
+      {/* 4. FINANCEIRO */}
       {activeTab === 'commissions' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
-          
-          {/* Header Financeiro */}
           <div className="flex flex-col md:flex-row justify-between gap-4 items-center bg-white dark:bg-stone-900 p-4 rounded-xl border border-stone-100 dark:border-stone-800 shadow-sm">
              <div className="flex items-center gap-2">
                 <Button variant="outline" size="icon" onClick={() => handleCommissionMonthChange('prev')} className="h-8 w-8"><ChevronLeft className="h-4 w-4" /></Button>
@@ -647,28 +809,44 @@ export default function Staff() {
                          {list.map(com => {
                            const isPaid = com.status === 'pago';
                            const dateObj = new Date(com.date + 'T12:00:00');
+                           // 🔥 VERIFICA SE VALOR É ZERO (PACOTE/COMBO)
+                           const isZeroValue = com.commission_amount_centavos === 0;
+
                            return (
                              <div key={com.id} className="flex flex-col md:flex-row justify-between items-start md:items-center p-4 border-b border-stone-100 last:border-0 dark:border-stone-800 text-sm hover:bg-white dark:hover:bg-stone-900 transition-colors">
                                 <div className="flex gap-3 mb-2 md:mb-0">
                                    <div className={`mt-1 w-2 h-2 rounded-full ${isPaid ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
                                    <div>
-                                      <div className="font-medium text-stone-700 dark:text-stone-300">{com.service_name || 'Serviço'}</div>
+                                      <div className="font-medium text-stone-700 dark:text-stone-300 flex items-center gap-2">
+                                          {com.service_name || 'Serviço'}
+                                          {/* 🔥 BADGE AZUL PARA PACOTE */}
+                                          {isZeroValue && (
+                                              <Badge variant="secondary" className="h-5 px-1.5 text-[10px] bg-blue-50 text-blue-700 border-blue-100 hover:bg-blue-100 flex items-center gap-1">
+                                                  <Package className="w-3 h-3" /> Pacote / Combo
+                                              </Badge>
+                                          )}
+                                      </div>
                                       <div className="text-xs text-stone-400 flex items-center gap-1">
                                          <CalendarDays className="w-3 h-3" /> {format(dateObj, 'dd/MM/yyyy')}
                                          <span className="mx-1">•</span>
                                          {com.commission_percentage}%
+                                      </div>
+                                      {/* 🔥 MOSTRA O VALOR BASE (TRANSPARÊNCIA FINANCEIRA) */}
+                                      <div className="text-[10px] text-stone-400 mt-1">
+                                          Valor Base: R$ {(com.service_price_centavos/100).toFixed(2)}
                                       </div>
                                    </div>
                                 </div>
                                 
                                 <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
                                    <div className="text-right">
-                                      <div className="font-bold text-stone-700 dark:text-stone-200">R$ {(com.commission_amount_centavos/100).toFixed(2)}</div>
+                                      <div className={`font-bold ${isZeroValue ? 'text-stone-400' : 'text-stone-700 dark:text-stone-200'}`}>
+                                          {isZeroValue ? "Sessão" : `R$ ${(com.commission_amount_centavos/100).toFixed(2)}`}
+                                      </div>
                                       {isPaid && com.payment_date && <div className="text-[10px] text-emerald-600">Pago em {format(new Date(com.payment_date + 'T12:00:00'), 'dd/MM')}</div>}
                                    </div>
                                    
                                    <div className="flex gap-2">
-                                      {/* BOTÃO NOVO: VER NA AGENDA */}
                                       <Button size="icon" variant="ghost" className="h-8 w-8 text-stone-400 hover:text-[#C6A87C]" onClick={() => navigate(`/appointments?date=${format(dateObj, 'yyyy-MM-dd')}`)} title="Ver na Agenda">
                                          <ArrowUpRight className="w-4 h-4" />
                                       </Button>

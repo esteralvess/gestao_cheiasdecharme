@@ -10,7 +10,9 @@ import {
   Package, 
   Repeat,
   CalendarDays,
-  AlertCircle 
+  AlertCircle,
+  Wallet,
+  CheckCircle2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -25,13 +27,23 @@ import { Badge } from "@/components/ui/badge";
 import AppointmentCard from "@/components/AppointmentCard";
 import CalendarView from "@/components/CalendarView";
 import { PaymentConfirmationModal } from "@/components/PaymentConfirmationModal";
-import { format, parseISO, setHours, setMinutes, isSameDay, addMinutes, getDay, addDays, startOfDay, isBefore, areIntervalsOverlapping, getHours, getMinutes } from "date-fns";
+import { format, parseISO, setHours, setMinutes, isSameDay, addMinutes, getDay, addDays, startOfDay, isBefore, areIntervalsOverlapping, getHours, getMinutes, isValid } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
 import { appointmentsAPI, customersAPI, staffAPI, servicesAPI, locationsAPI, staffServicesAPI, staffShiftsAPI, promotionsAPI } from "@/services/api";
 
 // --- TIPOS ---
 type AppointmentStatus = "confirmed" | "completed" | "cancelled" | "pending";
+
+// Adicionei a interface que faltava aqui 👇
+interface StaffShift { 
+  id?: number; 
+  staff_id: string; 
+  location_id: string; 
+  weekday: number; 
+  start_time: string; 
+  end_time: string; 
+}
 
 interface AppointmentFromAPI { 
   id: string; 
@@ -65,18 +77,20 @@ interface ProcessedAppointment {
 }
 
 // --- COMPONENTE AUXILIAR: PREVISÃO DE PACOTE ---
-function PackagePreview({ startDate, totalSessions, interval }: { startDate: Date, totalSessions: number, interval: number }) {
+function PackagePreview({ startDate, totalSessions, interval }: { startDate: Date | undefined, totalSessions: number, interval: number }) {
     const dates = useMemo(() => {
         if (!startDate || totalSessions <= 0) return [];
         return Array.from({ length: totalSessions }).map((_, i) => addDays(startDate, i * interval));
     }, [startDate, totalSessions, interval]);
+
+    if (!startDate) return null;
 
     return (
         <div className="bg-stone-50 border border-stone-200 rounded-lg p-3 mt-2">
             <p className="text-xs font-bold text-stone-500 uppercase mb-2 flex items-center gap-2">
                <CalendarDays className="w-3 h-3"/> Previsão das Sessões ({totalSessions})
             </p>
-            <div className="grid grid-cols-2 gap-2 max-h-[150px] overflow-y-auto pr-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[150px] overflow-y-auto pr-1">
                 {dates.map((date, idx) => (
                     <div key={idx} className="flex items-center gap-2 text-xs bg-white p-2 rounded border border-stone-100 shadow-sm">
                         <span className="font-bold text-[#C6A87C] w-5">{idx + 1}ª</span>
@@ -88,16 +102,31 @@ function PackagePreview({ startDate, totalSessions, interval }: { startDate: Dat
     )
 }
 
-// --- HELPER DE TEMPO ---
-const getMinutesFromTime = (timeStr: string) => {
-    const [h, m] = timeStr.split(':').map(Number);
-    return h * 60 + m;
-};
-
 export default function Appointments() {
   const queryClient = useQueryClient();
   
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  // Lê o parametro da URL (ex: ?date=2023-12-25)
+  const searchParams = new URLSearchParams(window.location.search);
+  const urlDate = searchParams.get('date');
+  
+  // Se tiver data na URL, usa ela. Se não, usa Hoje.
+  const initialDate = useMemo(() => {
+      if (urlDate) {
+          const parsed = parseISO(urlDate);
+          if (isValid(parsed)) return parsed;
+      }
+      return new Date();
+  }, [urlDate]);
+
+  const [selectedDate, setSelectedDate] = useState<Date>(initialDate);
+  
+  // Atualiza se a URL mudar (opcional, para navegação interna funcionar bem)
+  useEffect(() => {
+      if (urlDate) {
+          const parsed = parseISO(urlDate);
+          if (isValid(parsed)) setSelectedDate(parsed);
+      }
+  }, [urlDate]);
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const [selectedStaffFilter, setSelectedStaffFilter] = useState<string>("all");
   const [selectedLocationFilter, setSelectedLocationFilter] = useState<string>("all");
@@ -112,9 +141,9 @@ export default function Appointments() {
   const [formData, setFormData] = useState({
     customer: "", customerName: "", customerPhone: "", 
     service: "", staff: "", location: "", promotion: "",
-    date: new Date(), time: "", notes: "", 
+    date: undefined as Date | undefined,
+    time: "", notes: "", 
     staffMapping: {} as Record<number, string>,
-    // Novo: Armazena datas customizadas para pacotes
     packageDates: [] as Date[]
   });
 
@@ -124,12 +153,11 @@ export default function Appointments() {
   const { data: services = [] } = useQuery<any[]>({ queryKey: ['services'], queryFn: servicesAPI.getAll });
   const { data: locations = [] } = useQuery<any[]>({ queryKey: ['locations'], queryFn: locationsAPI.getAll });
   const { data: staffServices = [] } = useQuery<any[]>({ queryKey: ['staffServices'], queryFn: staffServicesAPI.getAll });
-  const { data: staffShifts = [] } = useQuery<any[]>({ queryKey: ['staffShifts'], queryFn: staffShiftsAPI.getAll });
+  const { data: staffShifts = [] } = useQuery<StaffShift[]>({ queryKey: ['staffShifts'], queryFn: staffShiftsAPI.getAll });
   const { data: promotions = [] } = useQuery<any[]>({ queryKey: ['promotions'], queryFn: promotionsAPI.getAll });
 
   // --- LÓGICA DE NEGÓCIO ---
 
-  // Helper para buscar profissionais qualificados
   const getQualifiedStaff = (serviceId: string) => {
       const qualifiedIds = staffServices
           .filter((ss: any) => ss.service_id === serviceId)
@@ -137,11 +165,10 @@ export default function Appointments() {
       
       if (formData.location) {
           const staffInLocation = new Set(staffShifts
-            .filter((shift: any) => shift.location_id === formData.location)
-            .map((shift: any) => shift.staff_id));
+            .filter((shift: any) => String(shift.location_id) === String(formData.location))
+            .map((shift: any) => String(shift.staff_id)));
           return staffList.filter((s:any) => qualifiedIds.includes(s.id) && staffInLocation.has(s.id));
       }
-
       return staffList.filter((s:any) => qualifiedIds.includes(s.id));
   };
 
@@ -149,11 +176,22 @@ export default function Appointments() {
      if (agendamentoType === 'avulso' && formData.service) {
          return getQualifiedStaff(formData.service);
      }
+     if (agendamentoType === 'pacote' && formData.promotion) {
+         const promo = promotions.find((p:any) => p.id === formData.promotion);
+         const firstItem = promo?.items?.[0];
+         const serviceId = firstItem?.service || firstItem?.service_id;
+         if (serviceId) return getQualifiedStaff(serviceId);
+     }
+     if (formData.location) {
+         const staffInLocation = new Set(staffShifts
+            .filter((shift: any) => String(shift.location_id) === String(formData.location))
+            .map((shift: any) => String(shift.staff_id)));
+         return staffList.filter((s:any) => staffInLocation.has(s.id));
+     }
      return staffList;
-  }, [agendamentoType, formData.service, formData.location, staffServices, staffShifts]);
+  }, [agendamentoType, formData.service, formData.promotion, formData.location, staffServices, staffShifts, promotions, staffList]);
 
-
-  // 2. Validação de Data (Escala + Local) - Genérica
+  // 2. Validação de Data (Escala + Local)
   const isDateDisabledCheck = (date: Date, staffId?: string) => {
     if (isBefore(date, startOfDay(new Date()))) return true;
     if (!formData.location) return false; 
@@ -161,28 +199,33 @@ export default function Appointments() {
     const targetStaff = staffId || formData.staff;
     if (!targetStaff) return false;
 
-    const dayOfWeek = getDay(date); 
+    const jsDay = getDay(date); 
+    const dbDay = jsDay === 0 ? 7 : jsDay;
+
     const hasShift = staffShifts.some((shift: any) => {
-      const staffMatch = shift.staff_id === targetStaff;
-      const dayMatch = shift.weekday === dayOfWeek; 
-      const locationMatch = shift.location_id === formData.location;
+      const staffMatch = String(shift.staff_id) === String(targetStaff);
+      const dayMatch = Number(shift.weekday) === dbDay; 
+      const locationMatch = String(shift.location_id) === String(formData.location);
       return staffMatch && dayMatch && locationMatch;
     });
-
     return !hasShift; 
   };
   
-  // Wrapper para o DatePicker principal
   const isDateDisabled = (date: Date) => {
       if (!editingAppointment && isBefore(date, startOfDay(new Date()))) return true;
-
+      
       if (agendamentoType === 'combo' && formData.promotion) {
           const promo = promotions.find((p:any) => p.id === formData.promotion);
           if (!promo) return true;
-          // Verifica se TODOS os staffs trabalham nesse dia
+          
           const allStaffsSelected = promo.items.every((_: any, idx: number) => !!formData.staffMapping[idx]);
+          
           if (!allStaffsSelected) return false; 
-          return !promo.items.every((_: any, idx: number) => isDateDisabledCheck(date, formData.staffMapping[idx]));
+
+          return !promo.items.every((_: any, idx: number) => {
+             const staffId = formData.staffMapping[idx];
+             return !isDateDisabledCheck(date, staffId);
+          });
       }
       return isDateDisabledCheck(date);
   };
@@ -190,152 +233,180 @@ export default function Appointments() {
   // 3. Cálculo de Horários Disponíveis
   const availableTimeSlots = useMemo(() => {
       if (!formData.date || !formData.location) return [];
-      const dayOfWeek = getDay(formData.date);
+      const jsDay = getDay(formData.date);
+      const dbDay = jsDay === 0 ? 7 : jsDay;
 
-      // --- CASO COMBO ---
+      // ==========================================
+      // LÓGICA PARA COMBO (ENCADEAMENTO)
+      // ==========================================
       if (agendamentoType === 'combo' && formData.promotion) {
           const promo = promotions.find((p:any) => p.id === formData.promotion);
           if (!promo || !promo.items) return [];
 
-          // Só calcula se todos os profissionais estiverem selecionados
           const allStaffsSelected = promo.items.every((_: any, idx: number) => !!formData.staffMapping[idx]);
           if (!allStaffsSelected) return [];
 
-          // Gera slots de 30 em 30 min (08:00 até 20:00 - configurável)
-          const potentialSlots = [];
-          for (let h = 8; h < 20; h++) {
-              potentialSlots.push({ h, m: 0 });
-              potentialSlots.push({ h, m: 30 });
-          }
-
-          const validSlots: string[] = [];
-
-          potentialSlots.forEach(({ h, m }) => {
-              let currentStart = setMinutes(setHours(formData.date, h), m);
-              
-              // Bloqueia passado se for hoje
-              if (isSameDay(formData.date, new Date()) && isBefore(currentStart, new Date())) return;
-
-              let isChainValid = true;
-              let chainTime = currentStart;
-
-              // Percorre cada serviço do combo sequencialmente
-              for (let i = 0; i < promo.items.length; i++) {
-                  const item = promo.items[i];
-                  const staffId = formData.staffMapping[i];
-                  const srv = services.find((s:any) => s.id === (item.service || item.service_id));
-                  const duration = srv?.default_duration_min || 30;
-                  const serviceEnd = addMinutes(chainTime, duration);
-
-                  // A. Verifica se o profissional tem turno cobrindo esse intervalo exato
-                  const staffShift = staffShifts.find((s: any) => 
-                      s.staff_id === staffId && 
-                      s.weekday === dayOfWeek && 
-                      s.location_id === formData.location
-                  );
-
-                  if (!staffShift) { isChainValid = false; break; }
-
-                  const shiftStartMins = getMinutesFromTime(staffShift.start_time);
-                  const shiftEndMins = getMinutesFromTime(staffShift.end_time);
-                  const serviceStartMins = getMinutes(chainTime) + (getHours(chainTime) * 60);
-                  const serviceEndMins = getMinutes(serviceEnd) + (getHours(serviceEnd) * 60);
-
-                  if (serviceStartMins < shiftStartMins || serviceEndMins > shiftEndMins) {
-                      isChainValid = false; break;
+          const sequence: any[] = [];
+          promo.items.forEach((item: any, idx: number) => {
+              const srv = services.find((s:any) => s.id === (item.service || item.service_id));
+              const staffId = formData.staffMapping[idx];
+              if (srv && staffId) {
+                  for (let q = 0; q < (item.quantity || 1); q++) {
+                      sequence.push({
+                          service: srv,
+                          staffId: staffId,
+                          duration: Number(srv.default_duration_min) || 30
+                      });
                   }
-
-                  // B. Verifica se o profissional já tem agendamento nesse intervalo
-                  const hasConflict = appointments.some((app: any) => {
-                      if (app.status === 'cancelled') return false;
-                      if (app.staff !== staffId) return false;
-                      const appStart = parseISO(app.start_time);
-                      const appEnd = parseISO(app.end_time);
-                      return areIntervalsOverlapping(
-                          { start: chainTime, end: serviceEnd }, 
-                          { start: appStart, end: appEnd }
-                      );
-                  });
-
-                  if (hasConflict) { isChainValid = false; break; }
-
-                  // O próximo serviço começa onde este termina
-                  chainTime = serviceEnd;
-              }
-
-              if (isChainValid) {
-                  validSlots.push(format(currentStart, 'HH:mm'));
               }
           });
 
-          return validSlots;
+          if (sequence.length === 0) return [];
+
+          const firstStaffId = sequence[0].staffId;
+          const firstShifts = staffShifts.filter((s: any) => 
+              String(s.staff_id) === String(firstStaffId) && 
+              Number(s.weekday) === dbDay && 
+              String(s.location_id) === String(formData.location)
+          );
+
+          if (firstShifts.length === 0) return null; 
+
+          const validSlots = new Set<string>();
+
+          firstShifts.forEach((shift: any) => {
+              const [startH, startM] = shift.start_time.split(':').map(Number);
+              const [endH, endM] = shift.end_time.split(':').map(Number);
+              
+              let current = setMinutes(setHours(formData.date!, startH), startM);
+              const shiftEnd = setMinutes(setHours(formData.date!, endH), endM);
+
+              if (isSameDay(formData.date!, new Date()) && isBefore(current, new Date())) {
+                  const now = new Date();
+                  const remainder = 30 - (now.getMinutes() % 30);
+                  current = addMinutes(now, remainder);
+              }
+
+              while (current < shiftEnd) {
+                  let chainTime = current;
+                  let isChainValid = true;
+
+                  for (let i = 0; i < sequence.length; i++) {
+                      const step = sequence[i];
+                      const serviceEnd = addMinutes(chainTime, step.duration);
+
+                      const hasShift = staffShifts.some((s: any) => 
+                          String(s.staff_id) === String(step.staffId) && 
+                          Number(s.weekday) === dbDay && 
+                          String(s.location_id) === String(formData.location) &&
+                          s.start_time <= format(chainTime, 'HH:mm:ss') && 
+                          s.end_time >= format(serviceEnd, 'HH:mm:ss')
+                      );
+
+                      if (!hasShift) { 
+                          isChainValid = false; 
+                          break; 
+                      }
+
+                      const hasConflict = appointments.some((app: any) => {
+                          if (app.status === 'cancelled') return false;
+                          if (String(app.staff) !== String(step.staffId)) return false;
+                          try {
+                              const appStart = parseISO(app.start_time);
+                              const appEnd = parseISO(app.end_time);
+                              if (!isValid(appStart) || !isValid(appEnd)) return false;
+                              return areIntervalsOverlapping({ start: chainTime, end: serviceEnd }, { start: appStart, end: appEnd });
+                          } catch { return false; }
+                      });
+
+                      if (hasConflict) { 
+                          isChainValid = false; 
+                          break; 
+                      }
+
+                      chainTime = serviceEnd;
+                  }
+
+                  if (isChainValid) {
+                      validSlots.add(format(current, 'HH:mm'));
+                  }
+
+                  current = addMinutes(current, 30);
+              }
+          });
+
+          return Array.from(validSlots).sort();
       }
 
-      // --- CASO AVULSO / PACOTE SIMPLES ---
+      // --- CASO AVULSO / PACOTE ---
       if (!formData.staff) return [];
       
-      // Pega o turno do profissional
-      const shift = staffShifts.find((s: any) => 
-          s.staff_id === formData.staff && 
-          s.location_id === formData.location && 
-          s.weekday === dayOfWeek
+      const shifts = staffShifts.filter((s: any) => 
+          String(s.staff_id) === String(formData.staff) && 
+          String(s.location_id) === String(formData.location) && 
+          Number(s.weekday) === dbDay 
       );
 
-      if (!shift) return [];
+      if (shifts.length === 0) return null; 
 
       let duration = 60;
       if (agendamentoType === 'avulso' && formData.service) {
           const srv = services.find((s:any) => s.id === formData.service);
-          if (srv) duration = srv.default_duration_min;
+          if (srv) duration = Number(srv.default_duration_min) || 30;
       } else if (agendamentoType === 'pacote' && formData.promotion) {
           const promo = promotions.find((p:any) => p.id === formData.promotion);
-          if (promo?.items && promo.items.length > 0) {
+          if (promo?.items) {
              const firstItem = promo.items[0];
              const srv = services.find((s:any) => s.id === (firstItem.service || firstItem.service_id));
-             duration = srv?.default_duration_min || 60;
+             duration = Number(srv?.default_duration_min) || 60;
           }
       }
 
       const slots: string[] = [];
-      const [startH, startM] = shift.start_time.split(':').map(Number);
-      const [endH, endM] = shift.end_time.split(':').map(Number);
-      
-      let current = setMinutes(setHours(formData.date, startH), startM);
-      const endShift = setMinutes(setHours(formData.date, endH), endM);
+      shifts.forEach((shift: any) => {
+          const [startH, startM] = shift.start_time.split(':').map(Number);
+          const [endH, endM] = shift.end_time.split(':').map(Number);
+          let current = setMinutes(setHours(formData.date!, startH), startM);
+          const endShift = setMinutes(setHours(formData.date!, endH), endM);
 
-      // Ajusta para agora se for hoje
-      if (isSameDay(formData.date, new Date()) && isBefore(current, new Date())) {
-          const now = new Date();
-          const remainder = 30 - (now.getMinutes() % 30);
-          current = addMinutes(now, remainder);
-      }
+          let adjustedEndShift = endShift;
+          if (endH < startH) {
+              adjustedEndShift = addDays(endShift, 1);
+          }
 
-      while (addMinutes(current, duration) <= endShift) {
-          const slotEnd = addMinutes(current, duration);
-          
-          const hasConflict = appointments.some((app: any) => {
-              if (app.status === 'cancelled') return false;
-              if (app.staff !== formData.staff) return false;
-              if (editingAppointment && app.id === editingAppointment.id) return false;
-              const appStart = parseISO(app.start_time);
-              const appEnd = parseISO(app.end_time);
-              return areIntervalsOverlapping({ start: current, end: slotEnd }, { start: appStart, end: appEnd });
-          });
+          if (isSameDay(formData.date!, new Date()) && isBefore(current, new Date())) {
+              const now = new Date();
+              const remainder = 30 - (now.getMinutes() % 30);
+              current = addMinutes(now, remainder);
+          }
 
-          if (!hasConflict) slots.push(format(current, 'HH:mm'));
-          current = addMinutes(current, 30);
-      }
-      return slots;
+          let iterations = 0;
+          while (addMinutes(current, duration) <= adjustedEndShift && iterations < 50) {
+              const slotEnd = addMinutes(current, duration);
+              
+              const hasConflict = appointments.some((app: any) => {
+                  try {
+                      if (app.status === 'cancelled') return false;
+                      if (String(app.staff) !== String(formData.staff)) return false;
+                      if (editingAppointment && app.id === editingAppointment.id) return false;
+                      const appStart = parseISO(app.start_time);
+                      const appEnd = parseISO(app.end_time);
+                      if(!isValid(appStart) || !isValid(appEnd)) return false;
+                      return areIntervalsOverlapping({ start: current, end: slotEnd }, { start: appStart, end: appEnd });
+                  } catch { return false; }
+              });
+
+              if (!hasConflict) slots.push(format(current, 'HH:mm'));
+              current = addMinutes(current, 30);
+              iterations++;
+          }
+      });
+      return Array.from(new Set(slots)).sort();
 
   }, [formData.date, formData.staff, formData.location, formData.service, formData.promotion, formData.staffMapping, staffShifts, appointments, services, promotions, agendamentoType, editingAppointment]);
 
-  // 4. Cálculo Inteligente de Sessões de Pacote (Com Validação Real e Editável)
   useEffect(() => {
-    if (agendamentoType !== 'pacote' || !formData.promotion || !formData.date || !formData.staff || !formData.location) {
-        return;
-    }
-    // Se o usuário já mexeu nas datas manualmente, não sobrescreve, A MENOS que a data inicial tenha mudado
-    // Lógica simplificada: Sempre recalcula se mudar a data inicial.
+    if (agendamentoType !== 'pacote' || !formData.promotion || !formData.date || !formData.staff || !formData.location) return;
     
     const promo = promotions.find((p:any) => p.id === formData.promotion);
     if (!promo) return;
@@ -343,46 +414,49 @@ export default function Appointments() {
     const totalSessions = promo.items.reduce((acc: number, item: any) => acc + (item.quantity || 1), 0);
     const interval = promo.suggested_interval_days || 7;
 
-    // ✅ CORREÇÃO AQUI: Tipagem Explícita para sessions
     const sessions: { date: Date; valid: boolean }[] = [];
     let currentDate = formData.date;
-    sessions.push({ date: currentDate, valid: true }); // 1ª Sessão (Data escolhida)
+    sessions.push({ date: currentDate, valid: true });
 
     for (let i = 1; i < totalSessions; i++) {
         let nextDate = addDays(currentDate, interval);
         let attempts = 0;
-        
-        // Loop: Procura o próximo dia em que o staff trabalha na unidade
         while (isDateDisabledCheck(nextDate, formData.staff) && attempts < 60) { 
             nextDate = addDays(nextDate, 1);
             attempts++;
         }
-        // Como o formData.packageDates espera Date[], vamos mapear no final
         sessions.push({ date: nextDate, valid: true }); 
         currentDate = nextDate;
     }
-    
     setFormData(prev => ({ ...prev, packageDates: sessions.map(s => s.date) }));
-
   }, [agendamentoType, formData.promotion, formData.date, formData.staff, formData.location]);
 
 
-  // 5. Processamento para Visualização
   const processedAppointments: ProcessedAppointment[] = useMemo(() => {
-    return appointments.map((app: any) => ({
-      id: app.id,
-      title: `${app.customer_name} - ${app.service_name}`,
-      start: parseISO(app.start_time),
-      end: parseISO(app.end_time),
-      resourceId: app.staff,
-      status: app.status as AppointmentStatus,
-      originalData: app,
-      customerName: app.customer_name,
-      serviceName: app.service_name,
-      staffName: app.staff_name,
-      startTime: parseISO(app.start_time),
-      endTime: parseISO(app.end_time)
-    }));
+    return appointments.map((app: any) => {
+        let start = new Date();
+        let end = new Date();
+        try {
+            start = parseISO(app.start_time);
+            end = parseISO(app.end_time);
+            if (!isValid(start) || !isValid(end)) return null;
+        } catch { return null; }
+
+        return {
+            id: app.id,
+            title: `${app.customer_name} - ${app.service_name}`,
+            start: start,
+            end: end,
+            resourceId: app.staff,
+            status: app.status as AppointmentStatus,
+            originalData: app,
+            customerName: app.customer_name,
+            serviceName: app.service_name,
+            staffName: app.staff_name,
+            startTime: start,
+            endTime: end
+        };
+    }).filter(Boolean) as ProcessedAppointment[]; 
   }, [appointments]);
 
   const filteredAppointmentsList = useMemo(() => {
@@ -405,11 +479,11 @@ export default function Appointments() {
         startTime: app.start,
         endTime: app.end,
         status: app.status,
+        locationName: locations.find((l:any) => l.id === app.originalData.location)?.name, 
         originalData: app.originalData
       }));
-  }, [filteredAppointmentsList, selectedDate]);
+  }, [filteredAppointmentsList, selectedDate, locations]);
 
-  // --- ACTIONS ---
   const createMutation = useMutation({
     mutationFn: appointmentsAPI.create,
     onSuccess: () => {
@@ -443,11 +517,14 @@ export default function Appointments() {
       return;
     }
 
-    // Validações Específicas
     if (agendamentoType === 'avulso' && !formData.staff) return toast.warning("Selecione o profissional.");
     
-    // Verifica disponibilidade do horário principal
-    if (availableTimeSlots.length === 0 || !availableTimeSlots.includes(formData.time)) {
+    if (!availableTimeSlots || (Array.isArray(availableTimeSlots) && availableTimeSlots.length === 0)) {
+         toast.error("Nenhum horário disponível para esta data.");
+         return;
+    }
+    
+    if (Array.isArray(availableTimeSlots) && !availableTimeSlots.includes(formData.time) && !editingAppointment) {
          toast.error("Horário indisponível! Selecione outro.");
          return;
     }
@@ -468,14 +545,15 @@ export default function Appointments() {
         const srv = services.find((s:any) => s.id === formData.service);
         if(!srv) return;
         
-        const endDateTime = addMinutes(startDateTime, srv.default_duration_min || 60);
+        const endDateTime = addMinutes(startDateTime, Number(srv.default_duration_min) || 60);
         
         const payload = {
             ...commonPayload,
             service: formData.service,
             start_time: startDateTime.toISOString(),
             end_time: endDateTime.toISOString(),
-            notes: formData.notes
+            notes: formData.notes,
+            final_amount_centavos: srv.price_centavos 
         };
 
         if (editingAppointment) {
@@ -484,58 +562,97 @@ export default function Appointments() {
             createMutation.mutate(payload, { onSuccess: () => { setIsModalOpen(false); toast.success("Agendamento criado!"); }});
         }
     } 
+    // --- CORREÇÃO DO COMBO (PREÇO DIRETO) ---
     else if (agendamentoType === "combo") {
         const selectedPromo = promotions.find((p:any) => p.id === formData.promotion);
         if(!selectedPromo) return;
         
-        // Verifica staffs do combo
         if (!selectedPromo.items.every((_: any, idx: number) => !!formData.staffMapping[idx])) {
             toast.warning("Selecione o profissional para cada serviço.");
             return;
         }
 
-        let currentStart = startDateTime;
-        for (let i = 0; i < selectedPromo.items.length; i++) {
-            const item = selectedPromo.items[i];
+        // 🔥 CORREÇÃO: Pega o preço já com desconto da promoção, SEM multiplicar novamente.
+        const totalComboPrice = selectedPromo.price_centavos; 
+
+        // Monta a sequência expandida
+        const sequence: any[] = [];
+        selectedPromo.items.forEach((item: any, idx: number) => {
             const srv = services.find((s:any) => s.id === (item.service || item.service_id));
-            const staffId = formData.staffMapping[i];
-            if(!srv || !staffId) continue;
+            const staffId = formData.staffMapping[idx];
+            if (srv && staffId) {
+                for (let q = 0; q < (item.quantity || 1); q++) {
+                    sequence.push({
+                        service: srv,
+                        staffId: staffId,
+                        duration: Number(srv.default_duration_min) || 30
+                    });
+                }
+            }
+        });
+
+        let currentStart = startDateTime;
+        for (let i = 0; i < sequence.length; i++) {
+            const step = sequence[i];
+            const currentEnd = addMinutes(currentStart, step.duration);
             
-            const currentEnd = addMinutes(currentStart, srv.default_duration_min || 30);
+            const itemNotes = i === 0 
+                ? `[Combo: ${selectedPromo.title}] ${formData.notes}` 
+                : `[Combo: ${selectedPromo.title} - Item ${i+1}] ${formData.notes}`;
+            
+            // Apenas a 1ª sessão recebe o valor total
+            const itemPrice = i === 0 ? totalComboPrice : 0;
+
             await createMutation.mutateAsync({
                 ...commonPayload,
-                service: srv.id,
-                staff: staffId,
+                service: step.service.id,
+                staff: step.staffId,
                 start_time: currentStart.toISOString(),
                 end_time: currentEnd.toISOString(),
-                notes: `[Combo: ${selectedPromo.title}] ${formData.notes}`
+                notes: itemNotes,
+                final_amount_centavos: itemPrice 
             });
             currentStart = currentEnd;
         }
         setIsModalOpen(false);
         toast.success("Combo agendado com sucesso!");
     }
+    // --- CORREÇÃO DO PACOTE (PREÇO DIRETO) ---
     else if (agendamentoType === "pacote") {
         const selectedPromo = promotions.find((p:any) => p.id === formData.promotion);
         if(!selectedPromo) return;
         
-        // Pega o primeiro serviço para referência de duração
-        const firstItem = selectedPromo.items[0];
-        const srv = services.find((s:any) => s.id === (firstItem.service || firstItem.service_id));
-        if(!srv) { toast.error("Serviço do pacote não encontrado."); return; }
+        const packageServiceSequence: any[] = [];
+        selectedPromo.items.forEach((item: any) => {
+             const srv = services.find((s:any) => s.id === (item.service || item.service_id));
+             if (srv) {
+                 for (let q = 0; q < item.quantity; q++) {
+                     packageServiceSequence.push(srv);
+                 }
+             }
+        });
 
-        // Usa as datas CUSTOMIZADAS pelo usuário
+        // 🔥 CORREÇÃO: Pega o preço já com desconto da promoção, SEM multiplicar novamente.
+        const totalPackagePrice = selectedPromo.price_centavos;
+
         for (let i = 0; i < formData.packageDates.length; i++) {
+            const currentService = packageServiceSequence[i] || packageServiceSequence[packageServiceSequence.length - 1];
+            
             const sessionDate = formData.packageDates[i];
             const sessionStart = setMinutes(setHours(sessionDate, hours), minutes);
-            const sessionEnd = addMinutes(sessionStart, srv.default_duration_min || 60);
+            const sessionEnd = addMinutes(sessionStart, Number(currentService.default_duration_min) || 60);
             
+            const sessionNotes = `[Pacote: ${selectedPromo.title} - Sessão ${i+1}/${formData.packageDates.length} - ${currentService.name}] ${formData.notes}`;
+            
+            const sessionPrice = i === 0 ? totalPackagePrice : 0;
+
             await createMutation.mutateAsync({
                 ...commonPayload,
-                service: srv.id,
+                service: currentService.id, 
                 start_time: sessionStart.toISOString(),
                 end_time: sessionEnd.toISOString(),
-                notes: `[Pacote: ${selectedPromo.title} - Sessão ${i+1}/${formData.packageDates.length}] ${formData.notes}`
+                notes: sessionNotes,
+                final_amount_centavos: sessionPrice
             });
         }
         setIsModalOpen(false);
@@ -550,51 +667,81 @@ export default function Appointments() {
       customer: "", customerName: "", customerPhone: "",
       service: "", staff: "", location: selectedLocationFilter !== "all" ? selectedLocationFilter : "",
       promotion: "",
-      date: new Date(), time: "", notes: "",
+      date: undefined, 
+      time: "", notes: "",
       staffMapping: {}, packageDates: []
     });
     setIsModalOpen(true);
   };
 
-  const handleEditClick = (app: any) => {
-      setEditingAppointment(app.originalData);
-      setAgendamentoType("avulso");
-      const start = app.start;
+  const handleEditClick = (appData: any) => {
+      const data = appData.originalData || appData;
+      setEditingAppointment(data);
+      setAgendamentoType("avulso"); 
+      let startDate = new Date();
+      try { startDate = parseISO(data.start_time); } catch (e) {}
+
       setFormData({
-          customer: app.originalData.customer,
+          customer: data.customer || "",
           customerName: "", customerPhone: "",
-          service: app.originalData.service,
-          staff: app.originalData.staff,
-          location: app.originalData.location,
+          service: data.service || "",
+          staff: data.staff || "",
+          location: data.location || "",
           promotion: "",
-          date: start,
-          time: format(start, "HH:mm"),
-          notes: app.originalData.notes || "",
+          date: startDate,
+          time: isValid(startDate) ? format(startDate, "HH:mm") : "",
+          notes: data.notes || "",
           staffMapping: {}, packageDates: []
       });
       setIsModalOpen(true);
   };
 
-  const handleStatusChange = (status: string) => {
-      if(status === 'completed') {
+  const handleSmartCompletion = () => {
+      if (!editingAppointment) return;
+      const price = editingAppointment.final_amount_centavos || 0;
+      
+      if (price > 0 || (agendamentoType === 'avulso' && !editingAppointment.notes?.includes('[Pacote') && !editingAppointment.notes?.includes('[Combo'))) {
           setIsModalOpen(false);
           setAppointmentToPay(editingAppointment);
           setPaymentModalOpen(true);
+      } else {
+          if (confirm("Este item não possui valor a receber. Deseja concluir a sessão?")) {
+              updateMutation.mutate({ id: editingAppointment.id, data: { status: 'completed' } });
+          }
+      }
+  };
+
+  const handleStatusChange = (status: string) => {
+      if(status === 'cancelled') {
+         const notes = editingAppointment?.notes || "";
+         if (notes.includes("[Pacote:")) {
+             const match = notes.match(/Sessão (\d+)\//);
+             if (match) {
+                 const sessionNum = parseInt(match[1]);
+                 if (sessionNum > 1) {
+                     toast.warning("Pacotes em andamento não podem ser cancelados.");
+                     return;
+                 }
+                 if (sessionNum === 1) {
+                     if (!confirm("Ao cancelar a 1ª sessão, TODAS as sessões futuras serão canceladas.")) return;
+                 }
+             }
+         }
+      }
+      if(status === 'completed') {
+          handleSmartCompletion();
       } else {
           updateMutation.mutate({ id: editingAppointment.id, data: { status } });
       }
   };
 
+  const handleDeleteAppointment = (id: string) => {
+      if (confirm("ATENÇÃO: Deseja realmente excluir este agendamento?")) deleteMutation.mutate(id);
+  };
+
   const handleStaffSelect = (idx: number, staffId: string) => {
       setFormData(f => ({ ...f, staffMapping: { ...f.staffMapping, [idx]: staffId }, time: '' }));
   };
-
-  // Helper para calcular total de sessões do pacote selecionado
-  const selectedPackageTotalSessions = useMemo(() => {
-     if (agendamentoType !== 'pacote' || !formData.promotion) return 0;
-     const promo = promotions.find((p:any) => p.id === formData.promotion);
-     return promo ? promo.items.reduce((acc: number, item: any) => acc + (item.quantity || 1), 0) : 0;
-  }, [agendamentoType, formData.promotion, promotions]);
 
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6 animate-in fade-in bg-stone-50/50 dark:bg-stone-950 min-h-screen font-sans">
@@ -641,7 +788,13 @@ export default function Appointments() {
                 <div className="p-4 md:p-6 space-y-4">
                     <div className="flex items-center justify-between border-b pb-4"><div className="flex items-center gap-3"><div className="text-3xl font-bold text-stone-800">{format(selectedDate, "dd")}</div><div className="flex flex-col"><span className="text-sm font-medium uppercase text-stone-500">{format(selectedDate, "MMMM", { locale: ptBR })}</span><span className="text-xs text-stone-400 capitalize">{format(selectedDate, "EEEE", { locale: ptBR })}</span></div></div><Badge variant="secondary">{dailyAppointments.length} agendamentos</Badge></div>
                     <div className="space-y-3">
-                        {dailyAppointments.length > 0 ? dailyAppointments.map((app: any) => <AppointmentCard key={app.id} {...app} onClick={() => handleEditClick(app)} />) : <div className="text-center py-16 text-stone-400"><Clock className="w-8 h-8 mx-auto mb-2 opacity-20" /><p>Dia livre.</p></div>}
+                        {dailyAppointments.length > 0 ? dailyAppointments.map((app: any) => (
+                            <AppointmentCard 
+                                key={app.id} 
+                                {...app} 
+                                onClick={() => handleEditClick(app)} 
+                            />
+                        )) : <div className="text-center py-16 text-stone-400"><Clock className="w-8 h-8 mx-auto mb-2 opacity-20" /><p>Dia livre.</p></div>}
                     </div>
                 </div>
             ) : (
@@ -712,7 +865,6 @@ export default function Appointments() {
                             </Select>
                         </div>
                         
-                        {/* LISTA DE ITENS DO COMBO COM SELEÇÃO DE STAFF INDIVIDUAL */}
                         {formData.promotion && (
                             <div className="space-y-3 mt-2">
                                 <p className="text-[10px] font-bold text-stone-400 uppercase">Selecione os profissionais</p>
@@ -769,7 +921,7 @@ export default function Appointments() {
                                 <p className="text-xs font-bold text-stone-500 uppercase mb-2 flex items-center gap-2">
                                    <CalendarDays className="w-3 h-3"/> Datas das Sessões (Editável)
                                 </p>
-                                <div className="grid grid-cols-2 gap-2 max-h-[150px] overflow-y-auto pr-1">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[150px] overflow-y-auto pr-1">
                                     {formData.packageDates.map((date, idx) => (
                                         <div key={idx} className="flex items-center gap-2 text-xs bg-stone-50 p-1 rounded border border-stone-100">
                                             <span className="font-bold text-[#C6A87C] w-5 text-center">{idx + 1}ª</span>
@@ -829,7 +981,7 @@ export default function Appointments() {
                 {/* 4. DATA E HORA (COM LISTA SUSPENSA DE HORÁRIOS) */}
                 <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
-                        <Label className="text-xs font-bold text-stone-500 uppercase">Data</Label>
+                        <Label className="text-xs font-bold text-stone-500 uppercase">Data de Início</Label>
                         <Popover>
                             <PopoverTrigger asChild>
                                 <Button variant="outline" className={`w-full justify-start text-left font-normal ${!formData.staff && agendamentoType !== 'combo' || !formData.location ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={(!formData.staff && agendamentoType !== 'combo') || !formData.location}>
@@ -853,17 +1005,23 @@ export default function Appointments() {
                     {/* 🔥 LISTA SUSPENSA DE HORÁRIOS DISPONÍVEIS */}
                     <div className="space-y-1">
                         <Label className="text-xs font-bold text-stone-500 uppercase">Horário</Label>
-                        <Select value={formData.time} onValueChange={(v) => setFormData({...formData, time: v})} disabled={!formData.date || availableTimeSlots.length === 0}>
+                        <Select value={formData.time} onValueChange={(v) => setFormData({...formData, time: v})} disabled={!formData.date || (!availableTimeSlots && !editingAppointment)}>
                             <SelectTrigger className="bg-stone-50 border-stone-200">
-                                <SelectValue placeholder={availableTimeSlots.length === 0 ? "Sem horários" : "Selecione..."} />
+                                <SelectValue placeholder={
+                                    availableTimeSlots === null 
+                                    ? "Sem turno neste dia" 
+                                    : (availableTimeSlots.length === 0 ? "Agenda cheia" : "Selecione...")
+                                } />
                             </SelectTrigger>
                             <SelectContent>
-                                {availableTimeSlots.length > 0 ? (
+                                {availableTimeSlots && availableTimeSlots.length > 0 ? (
                                     availableTimeSlots.map((time) => (
                                         <SelectItem key={time} value={time}>{time}</SelectItem>
                                     ))
                                 ) : (
-                                    <SelectItem value="none" disabled>Sem horários livres</SelectItem>
+                                    <SelectItem value="none" disabled>
+                                        {availableTimeSlots === null ? "Profissional não trabalha neste dia/unidade" : "Agenda cheia"}
+                                    </SelectItem>
                                 )}
                             </SelectContent>
                         </Select>
@@ -878,14 +1036,31 @@ export default function Appointments() {
                 {/* BOTÕES DE STATUS (EDIÇÃO) */}
                 {editingAppointment && (
                     <div className="flex gap-2 pt-2 border-t mt-2">
-                        <Button size="sm" variant="outline" className="flex-1 text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => handleStatusChange('confirmed')}>Confirmar</Button>
-                        <Button size="sm" variant="outline" className="flex-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50" onClick={() => handleStatusChange('completed')}>Pagar</Button>
-                        <Button size="sm" variant="outline" className="flex-1 text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleStatusChange('cancelled')}>Cancelar</Button>
+                        {/* Se pendente, confirma. Se não, permite mudar. */}
+                        {editingAppointment.status === 'pending' ? (
+                            <Button size="sm" variant="outline" className="flex-1 text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => handleStatusChange('confirmed')}>Confirmar Agendamento</Button>
+                        ) : (
+                            <Button size="sm" variant="outline" className="flex-1 text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleStatusChange('cancelled')}>Cancelar</Button>
+                        )}
+                        
+                        {/* Botão Inteligente: Pagar ou Concluir */}
+                        <Button 
+                            size="sm" 
+                            variant="outline" 
+                            className="flex-1 text-emerald-600 border-emerald-200 hover:bg-emerald-50 font-bold" 
+                            onClick={() => handleStatusChange('completed')}
+                        >
+                            {(editingAppointment.final_amount_centavos || 0) > 0 || !editingAppointment.notes?.includes('[') ? (
+                                <><Wallet className="w-3 h-3 mr-2"/> Receber & Concluir</>
+                            ) : (
+                                <><CheckCircle2 className="w-3 h-3 mr-2"/> Concluir Sessão</>
+                            )}
+                        </Button>
                     </div>
                 )}
             </div>
             <DialogFooter className="flex-col sm:flex-row gap-2">
-                {editingAppointment && <Button variant="ghost" onClick={() => { if(confirm("Excluir?")) deleteMutation.mutate(editingAppointment.id) }} className="text-red-500 hover:bg-red-50 sm:mr-auto"><Trash2 className="w-4 h-4 mr-2"/> Excluir</Button>}
+                {editingAppointment && <Button variant="ghost" onClick={() => handleDeleteAppointment(editingAppointment.id)} className="text-red-500 hover:bg-red-50 sm:mr-auto"><Trash2 className="w-4 h-4 mr-2"/> Excluir</Button>}
                 <Button variant="outline" onClick={() => setIsModalOpen(false)}>Cancelar</Button>
                 <Button onClick={handleSave} disabled={createMutation.isPending || updateMutation.isPending} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white font-bold shadow-md">
                     {createMutation.isPending ? "Salvando..." : "Salvar Agendamento"}

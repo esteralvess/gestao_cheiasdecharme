@@ -60,13 +60,11 @@ class LocationViewSet(viewsets.ModelViewSet):
     queryset = Location.objects.all()
     serializer_class = LocationSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []
 
 class StaffViewSet(viewsets.ModelViewSet):
     queryset = Staff.objects.all()
     serializer_class = StaffSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []
     
     def get_queryset(self):
         qs = super().get_queryset()
@@ -83,16 +81,15 @@ class ServiceViewSet(viewsets.ModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []
 
 class CustomerViewSet(viewsets.ModelViewSet):
-    # Otimização: annotate já faz a conta no banco
     queryset = Customer.objects.annotate(
-        visits=F('previous_visits') + Count('appointment', filter=Q(appointment__status='completed'))
+        visits=F('previous_visits') + Count('appointment', filter=Q(appointment__status='completed')),
+        referral_count=Count('referrals_made')
     ).order_by('-created_at')
+    
     serializer_class = CustomerSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []
     
     @action(detail=False, methods=['get'], url_path='check-phone')
     def check_phone(self, request):
@@ -100,7 +97,6 @@ class CustomerViewSet(viewsets.ModelViewSet):
         if not phone: return Response({"error": "Telefone obrigatório."}, status=400)
         phone_clean = ''.join(filter(str.isdigit, phone))
         try:
-            # Otimização: .only() busca apenas os campos necessários
             customer = Customer.objects.filter(whatsapp__endswith=phone_clean[-11:]).only('id', 'full_name', 'email').first()
             if customer: return Response({"exists": True, "id": customer.id, "name": customer.full_name, "email": customer.email})
             return Response({"exists": False})
@@ -125,7 +121,6 @@ class CustomerViewSet(viewsets.ModelViewSet):
         return Response(self.get_serializer(customer).data)
 
 class AppointmentViewSet(viewsets.ModelViewSet):
-    # 🔥 SUPER OTIMIZAÇÃO: select_related busca os dados das tabelas relacionadas em UMA query só.
     queryset = Appointment.objects.select_related('customer', 'staff', 'service', 'location').all().order_by('-start_time')
     serializer_class = AppointmentSerializer
     
@@ -142,7 +137,9 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         customer_phone = data.get('customer_phone')
         customer_email = data.get('customer_email')
         
-        customer_notes = data.get('customer_notes') or data.get('notes')
+        # Pega a nota específica de indicação (se houver)
+        customer_notes_input = data.get('customer_notes')
+        
         referrer_phone = data.get('referrer_phone')
 
         if customer_email == "": customer_email = None
@@ -164,12 +161,17 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         if not data.get('customer'): return Response({"error": "Cliente não identificado."}, status=400)
 
-        if customer and customer_notes:
-            if not customer.notes:
-                customer.notes = customer_notes; customer.save()
-            elif customer_notes not in customer.notes:
-                customer.notes = f"{customer.notes}\n{customer_notes}"; customer.save()
+        # Só adiciona ao campo de notas do CLIENTE se for informação de indicação
+        if customer and customer_notes_input:
+            if "Indicado por" in customer_notes_input:
+                if not customer.notes:
+                    customer.notes = customer_notes_input
+                    customer.save()
+                elif customer_notes_input not in customer.notes:
+                    customer.notes = f"{customer.notes}\n{customer_notes_input}"
+                    customer.save()
 
+        # Lógica de Indicação (Referral)
         if customer and referrer_phone and customer.is_truly_new:
             try:
                 ref_phone_clean = ''.join(filter(str.isdigit, str(referrer_phone)))
@@ -230,8 +232,14 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
             now = datetime.now()
             auto_note = f"Agendamento via Site em {now.strftime('%d/%m às %H:%M')}."
+            
+            # Pega as notas que vieram do formulário (ex: "Pacote: Massagem...")
             base_notes = data.get('notes', '')
-            referral_txt = f" ({customer_notes})" if (customer_notes and i == 0) else ""
+            
+            referral_txt = ""
+            if customer_notes_input and i == 0:
+                referral_txt = f" ({customer_notes_input})"
+
             final_notes = f"{base_notes}{referral_txt}\n{auto_note}" if i == 0 else base_notes
 
             appt_payload = data.copy()
@@ -244,7 +252,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         if created_appointments:
             try:
-                # Webhook Otimizado
                 first_appt = created_appointments[0]
                 n8n_payload = {
                     "customer_name": customer.full_name,
@@ -254,7 +261,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     "services": "\n".join(n8n_services_list),
                     "total_value": f"R$ {total_value_centavos/100:.2f}".replace('.', ',')
                 }
-                requests.post("https://webhooks.gerenc.com/webhook/pre-agendamento", json=n8n_payload, timeout=1) # Timeout bem curto para não travar
+                requests.post("https://webhooks.gerenc.com/webhook/pre-agendamento", json=n8n_payload, timeout=1) 
             except: pass
 
             return Response(self.get_serializer(created_appointments[0]).data, status=status.HTTP_201_CREATED)
@@ -269,8 +276,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         if response.status_code == 200 and request.data.get('status') == 'completed' and not was_completed:
             instance.refresh_from_db()
-            if instance.service.price_centavos > 0:
-                val = instance.final_amount_centavos if instance.final_amount_centavos else instance.service.price_centavos
+            if instance.final_amount_centavos and instance.final_amount_centavos > 0:
+                val = instance.final_amount_centavos
                 instance.customer.points += int(val / 100)
                 instance.customer.save()
             try:
@@ -289,11 +296,10 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         return response
 
 class StaffShiftViewSet(viewsets.ModelViewSet):
-    # Otimização com select_related
     queryset = StaffShift.objects.select_related('staff', 'location').all()
     serializer_class = StaffShiftSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = [] 
+    # 🔥 REMOVIDO: authentication_classes = [] 
     
     def get_queryset(self):
         qs = super().get_queryset()
@@ -301,11 +307,10 @@ class StaffShiftViewSet(viewsets.ModelViewSet):
         return qs
 
 class StaffServiceViewSet(viewsets.ModelViewSet):
-    # Otimização com select_related
     queryset = StaffService.objects.select_related('staff', 'service').all()
     serializer_class = StaffServiceSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = [] 
+    # 🔥 REMOVIDO: authentication_classes = []
     
     @action(detail=False, methods=['delete'], url_path='delete-by-params')
     def delete_by_params(self, request):
@@ -319,7 +324,7 @@ class StaffExceptionViewSet(viewsets.ModelViewSet):
     queryset = StaffException.objects.all()
     serializer_class = StaffExceptionSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []
+    
     def get_queryset(self): return StaffException.objects.select_related('staff').all().order_by('-start_date')
     
     def create(self, request, *args, **kwargs):
@@ -363,4 +368,3 @@ class PromotionViewSet(viewsets.ModelViewSet):
     queryset = Promotion.objects.prefetch_related('items__service').filter(active=True).order_by('title')
     serializer_class = PromotionSerializer
     permission_classes = [permissions.AllowAny]
-    authentication_classes = []

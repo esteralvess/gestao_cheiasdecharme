@@ -16,6 +16,7 @@ import NotFound from "@/pages/not-found";
 // Páginas Administrativas
 import Dashboard from "@/pages/Dashboard";
 import Appointments from "@/pages/Appointments";
+import PackageManagement from "@/pages/PackageManagement"; // <--- NOVO IMPORT
 import Customers from "@/pages/Customers";
 import Staff from "@/pages/Staff";
 import Services from "@/pages/Services";
@@ -28,15 +29,12 @@ import Promotions from "@/pages/Promotions";
 
 // 🔒 COMPONENTE DE PROTEÇÃO (Verifica Login)
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  // Verifica token no localStorage ou sessionStorage
   const token = localStorage.getItem('access_token') || sessionStorage.getItem('accessToken');
   
   if (!token) {
-    // Se não tiver token, manda pro login
     return <Redirect to="/login" />;
   }
 
-  // Se tiver token, renderiza o conteúdo (MainLayout)
   return <>{children}</>;
 }
 
@@ -54,11 +52,11 @@ function MainLayout() {
             <ThemeToggle />
           </header>
           <main className="flex-1 overflow-auto bg-background">
-            {/* ROTEADOR INTERNO (Só roda se estiver logado) */}
             <Switch>
               <Route path="/" component={AgendamentoCliente} />
               <Route path="/dashboard" component={Dashboard} />
               <Route path="/appointments" component={Appointments} />
+              <Route path="/packages" component={PackageManagement} /> {/* <--- NOVA ROTA */}
               <Route path="/customers" component={Customers} />
               <Route path="/staff" component={Staff} />
               <Route path="/services" component={Services} />
@@ -69,7 +67,6 @@ function MainLayout() {
               <Route path="/management" component={Management} />
               <Route path="/promotions" component={Promotions} />
               
-              {/* Se tentar acessar uma rota interna que não existe, cai aqui */}
               <Route component={NotFound} />
             </Switch>
           </main>
@@ -79,20 +76,14 @@ function MainLayout() {
   );
 }
 
-// 🚀 APLICAÇÃO PRINCIPAL
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        {/* ROTEADOR PRINCIPAL */}
         <Switch>
-          
-          {/* 1️⃣ ROTAS PÚBLICAS (Acesso Livre - SEM Layout Admin) */}
-          {/* Colocamos estas PRIMEIRO para o roteador achar elas antes de bloquear */}
           <Route path="/agendamento-online" component={AgendamentoCliente} />
           <Route path="/login" component={Login} />
 
-          {/* 2️⃣ ROTAS PROTEGIDAS (Qualquer outra coisa cai aqui) */}
           <Route>
             <PrivateRoute>
               <MainLayout />
