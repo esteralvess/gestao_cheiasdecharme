@@ -3,9 +3,9 @@ from rest_framework import serializers
 from django.utils import timezone
 import pytz
 from .models import (
-    Location, Promotion, PromotionItem, Referral, Staff, Service, Customer, Appointment, 
+    BankAccount, CreditCard, Location, Promotion, PromotionItem, Referral, Staff, Service, Customer, Appointment, 
     StaffCommission, StaffException, StaffService, ServiceLocation, 
-    StaffShift, BusinessException, Expense
+    StaffShift, BusinessException, Expense, TransactionCategory, Partner
 )
 
 # --- USUÁRIOS E PERMISSÕES ---
@@ -259,20 +259,37 @@ class StaffCommissionSerializer(serializers.ModelSerializer):
         if data.get('commission_percentage') and (data['commission_percentage'] < 0 or data['commission_percentage'] > 100): raise serializers.ValidationError("Percentual inválido")
         return data
 
+class CreditCardSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditCard
+        fields = '__all__'
+
+class TransactionCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TransactionCategory
+        fields = '__all__'
+
 class ExpenseSerializer(serializers.ModelSerializer):
+    card_name = serializers.CharField(source='card.name', read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True) # Para facilitar leitura
+    
     class Meta:
         model = Expense
-        fields = '__all__'
+        fields = [
+            'id', 'description', 'amount_centavos', 'payment_date', 
+            'notes', 'created_at', 'type', 'status', 'card', 'card_name',
+            'installments_current', 'installments_total', 'recurrence',
+            'category', 'category_name' # Usamos o novo campo category (ID) e category_name (Texto)
+        ]
 
 # --- PROMOÇÕES (COMBOS E PACOTES) ---
 
 class PromotionItemSerializer(serializers.ModelSerializer):
-    # Permite enviar o ID do serviço no campo 'service_id'
     service_id = serializers.PrimaryKeyRelatedField(
         queryset=Service.objects.all(), 
         source='service', 
         write_only=True,
-        allow_null=True, # Importante para flexibilidade
+        allow_null=True,
         required=False
     )
     service_name = serializers.CharField(source='service.name', read_only=True)
@@ -285,9 +302,10 @@ class PromotionItemSerializer(serializers.ModelSerializer):
             'service', 
             'service_name', 
             'quantity', 
-            'custom_interval', # 👈 Novo campo
-            'combo_id',        # 👈 Novo campo
-            'item_type'        # 👈 Novo campo
+            'custom_interval', 
+            'is_linked_to_previous', # 🔥 Adicionado aqui
+            'combo_id',        
+            'item_type'        
         ]
 
 class PromotionSerializer(serializers.ModelSerializer):
@@ -323,3 +341,13 @@ class PromotionSerializer(serializers.ModelSerializer):
                 PromotionItem.objects.create(promotion=instance, **item_data)
         
         return instance
+
+class BankAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BankAccount
+        fields = '__all__'
+
+class PartnerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Partner
+        fields = '__all__'

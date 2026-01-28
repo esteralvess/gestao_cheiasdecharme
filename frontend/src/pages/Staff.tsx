@@ -221,9 +221,8 @@ function ManualCommissionModal({ staff, services }: { staff: StaffMember[]; serv
       } 
   }); 
 
-  // Calcula comissão para mostrar em tempo real
   const previewCommission = useMemo(() => {
-      const total = (formData.service_price_centavos * formData.commission_percentage) / 10000; // /100 da pct e /100 dos centavos
+      const total = (formData.service_price_centavos * formData.commission_percentage) / 10000;
       return total;
   }, [formData.service_price_centavos, formData.commission_percentage]);
 
@@ -242,7 +241,6 @@ function ManualCommissionModal({ staff, services }: { staff: StaffMember[]; serv
             </div>
             <div className="space-y-2"><Label>Data</Label><Input type="date" value={formData.date} onChange={(e) => setFormData({...formData, date: e.target.value})} className="bg-stone-50 dark:bg-stone-900" /></div>
             
-            {/* 🔥 PREVIEW DO CÁLCULO */}
             <div className="bg-stone-100 p-3 rounded-lg flex justify-between items-center mt-2 border border-stone-200">
                 <span className="text-sm text-stone-600 flex items-center gap-2"><Calculator className="w-4 h-4"/> Comissão Prevista:</span>
                 <span className="text-lg font-bold text-[#C6A87C]">R$ {previewCommission.toFixed(2)}</span>
@@ -262,7 +260,7 @@ export default function Staff() {
   const [activeTab, setActiveTab] = useState('team'); 
   const [currentWeek, setCurrentWeek] = useState(new Date());
   const [currentMonth, setCurrentMonth] = useState(new Date());
-  const [scheduleView, setScheduleView] = useState<"week" | "month">("month"); // Padrão Mensal
+  const [scheduleView, setScheduleView] = useState<"week" | "month">("month"); 
   const [selectedLocation, setSelectedLocation] = useState<string>("");
   const [selectedDay, setSelectedDay] = useState(new Date()); 
   
@@ -273,7 +271,7 @@ export default function Staff() {
 
   const [editingShiftData, setEditingShiftData] = useState<any | null>(null);
   const [editingStaffMember, setEditingStaffMember] = useState<StaffMember | null>(null);
-  const [schedulingStaffMember, setSchedulingStaffMember] = useState<StaffMember | null>(null); // Para o novo modal de escala
+  const [schedulingStaffMember, setSchedulingStaffMember] = useState<StaffMember | null>(null);
 
   // Queries
   const { data: rawStaff = [], isLoading: isLoadingStaff } = useQuery<any[]>({ queryKey: ['staff'], queryFn: staffAPI.getAll });
@@ -341,9 +339,11 @@ export default function Staff() {
   
   const commissionsByStaff = useMemo(() => filteredCommissions.reduce((acc, commission) => { const staffId = commission.staff_id; if (!acc[staffId]) { acc[staffId] = []; } acc[staffId].push(commission); return acc; }, {} as Record<string, StaffCommission[]>), [filteredCommissions]);
   
+  // 🔥 CÁLCULOS FINANCEIROS CORRIGIDOS (IGNORAM VALORES ZERADOS EM PENDENTE)
   const totalCommissionAmount = filteredCommissions.reduce((sum, c) => sum + c.commission_amount_centavos, 0) / 100;
   const paidCommissionAmount = filteredCommissions.filter(c => c.status === 'pago').reduce((sum, c) => sum + c.commission_amount_centavos, 0) / 100;
-  const pendingCommissionAmount = totalCommissionAmount - paidCommissionAmount;
+  // Pendente real: status pendente E valor maior que 0
+  const pendingCommissionAmount = filteredCommissions.filter(c => c.status === 'pendente_pagamento' && c.commission_amount_centavos > 0).reduce((sum, c) => sum + c.commission_amount_centavos, 0) / 100;
 
   // Mutations
   const saveShift = useMutation({ mutationFn: (payload: ShiftPayload) => payload.id ? staffShiftsAPI.update(payload.id, payload) : staffShiftsAPI.create(payload), onSuccess: () => { toast.success("Turno salvo!"); setEditingShiftData(null); queryClient.invalidateQueries({ queryKey: ['staffShifts'] }); } });
@@ -399,10 +399,8 @@ export default function Staff() {
   const handleCommissionMonthChange = (direction: 'next' | 'prev') => { const currentDate = new Date(commissionMonthFilter + '-02T12:00:00'); const newDate = direction === 'prev' ? subMonths(currentDate, 1) : addMonths(currentDate, 1); setCommissionMonthFilter(format(newDate, 'yyyy-MM')); };
   const getStaffStatusForToday = (member: StaffMember) => { const today = new Date(); const timeOff = hasTimeOffOnDate(member.id, today, exceptions); if (timeOff) return <span className="font-medium text-amber-600">Ausente: {timeOff.type}</span>; const todayShifts = getSchedulesForStaffAndDay(member.id, today.getDay(), staffShifts, selectedLocation); if (todayShifts.length > 0) { const shift = todayShifts[0]; return <span className="text-emerald-600 font-medium">Trabalhando: {shift.start_time.substring(0, 5)} - {shift.end_time.substring(0, 5)}</span>; } return <span className="text-stone-400">Folga</span>; };
 
-  // Helper para o Modal de Lista do Dia (Mobile e Desktop)
   const getStaffListForDay = (date: Date) => {
       return filteredStaff.filter(member => {
-          // Passa a location selecionada para filtrar
           const shifts = getSchedulesForStaffAndDay(member.id, date.getDay(), staffShifts, selectedLocation);
           const off = hasTimeOffOnDate(member.id, date, exceptions);
           return shifts.length > 0 || off;
@@ -424,7 +422,6 @@ export default function Staff() {
       <ShiftEditModal shiftData={editingShiftData} staffName={editingShiftData ? getStaffName(editingShiftData.staff_id) : ''} allStaff={rawStaff} allLocations={locations} onClose={() => setEditingShiftData(null)} onSave={saveShift.mutate} onDelete={deleteShift.mutate} isSaving={saveShift.isPending} />
       <StaffDetailModal member={editingStaffMember} allServices={services} staffServices={staffServices} onClose={() => setEditingStaffMember(null)} onSave={saveStaffDetails.mutate} isSaving={saveStaffDetails.isPending} />
       
-      {/* 🔥 NOVO: Modal de Configuração de Escala Padrão */}
       <StandardScheduleModal 
           staff={schedulingStaffMember} 
           currentShifts={staffShifts} 
@@ -535,7 +532,7 @@ export default function Staff() {
         </div>
       )}
 
-      {/* 2. ESCALA (CALENDÁRIO COM BOLINHAS E LISTA) */}
+      {/* 2. ESCALA */}
       {activeTab === 'schedule' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
           <div className="flex flex-col md:flex-row justify-between gap-4 items-center bg-white dark:bg-stone-900 p-3 rounded-xl border border-stone-100 dark:border-stone-800 shadow-sm">
@@ -559,8 +556,6 @@ export default function Staff() {
 
           <div className="flex flex-col h-full space-y-4 w-full">
             <Card className="p-2 md:p-4 border-stone-100 shadow-sm bg-white w-full">
-                
-                {/* Grade de Dias (Mensal com Bolinhas) */}
                 <div className="w-full overflow-x-auto">
                     <div className="min-w-[320px] md:min-w-full">
                         <div className="grid grid-cols-7 mb-1">
@@ -606,7 +601,6 @@ export default function Staff() {
                                             <span>{format(day, "d")}</span>
                                         </div>
 
-                                        {/* 🔥 BOLINHAS INDICADORAS */}
                                         <div className="flex flex-wrap justify-center md:justify-start content-start gap-1 mt-1 px-1">
                                             {staffWorking.map(s => (
                                                 <div key={s.id} className="w-1.5 h-1.5 rounded-full bg-[#C6A87C]" title={`${s.name}: Trabalhando`} />
@@ -623,7 +617,6 @@ export default function Staff() {
                 </div>
             </Card>
 
-            {/* --- BLOCO 2: LISTA DE EQUIPE NO DIA (FIXO ABAIXO DO CALENDÁRIO) --- */}
             <div className="flex-1 animate-in slide-in-from-bottom-4 duration-500 pb-20">
                 <div className="bg-stone-50/50 rounded-lg p-3 min-h-[100px] border border-stone-100">
                     <h3 className="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-3 px-1 flex justify-between items-center">
@@ -719,7 +712,7 @@ export default function Staff() {
         </div>
       )}
 
-      {/* 4. FINANCEIRO */}
+      {/* 4. FINANCEIRO (ATUALIZADO) */}
       {activeTab === 'commissions' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
           <div className="flex flex-col md:flex-row justify-between gap-4 items-center bg-white dark:bg-stone-900 p-4 rounded-xl border border-stone-100 dark:border-stone-800 shadow-sm">
@@ -759,7 +752,7 @@ export default function Staff() {
                </div>
             </Card>
             <Card className="bg-white dark:bg-stone-900 border-stone-100 dark:border-stone-800 shadow-sm p-4 flex flex-col justify-center">
-               <span className="text-xs text-stone-400 uppercase font-semibold mb-1">Pendente</span>
+               <span className="text-xs text-stone-400 uppercase font-semibold mb-1">Pendente Real</span>
                <div className="flex items-center gap-2">
                   <div className="p-1.5 bg-amber-500/10 rounded-full text-amber-600"><Clock className="w-4 h-4" /></div>
                   <span className="text-2xl font-bold text-amber-600">R$ {pendingCommissionAmount.toFixed(2)}</span>
@@ -774,8 +767,9 @@ export default function Staff() {
              
              {Object.keys(commissionsByStaff).map(staffId => {
                 const list = commissionsByStaff[staffId];
+                // 🔥 SÓ CONTA COMO PENDENTE SE O VALOR > 0
+                const pending = list.filter(c => c.status === 'pendente_pagamento' && c.commission_amount_centavos > 0).reduce((acc, c) => acc + c.commission_amount_centavos, 0);
                 const total = list.reduce((acc, c) => acc + c.commission_amount_centavos, 0);
-                const pending = list.filter(c => c.status === 'pendente_pagamento').reduce((acc, c) => acc + c.commission_amount_centavos, 0);
                 
                 return (
                   <Accordion type="single" collapsible key={staffId} className="bg-white dark:bg-stone-900 border border-stone-100 dark:border-stone-800 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-all">
@@ -788,7 +782,7 @@ export default function Staff() {
                                </div>
                                <div className="text-left">
                                   <div className="font-bold text-stone-800 dark:text-stone-100">{getStaffName(staffId)}</div>
-                                  <div className="text-xs text-stone-400">{list.length} serviços</div>
+                                  <div className="text-xs text-stone-400">{list.length} serviços realizados</div>
                                </div>
                             </div>
                             <div className="flex gap-4 text-sm">
@@ -809,31 +803,26 @@ export default function Staff() {
                          {list.map(com => {
                            const isPaid = com.status === 'pago';
                            const dateObj = new Date(com.date + 'T12:00:00');
-                           // 🔥 VERIFICA SE VALOR É ZERO (PACOTE/COMBO)
+                           // 🔥 VERIFICA SE É PACOTE (VALOR ZERO)
                            const isZeroValue = com.commission_amount_centavos === 0;
 
                            return (
                              <div key={com.id} className="flex flex-col md:flex-row justify-between items-start md:items-center p-4 border-b border-stone-100 last:border-0 dark:border-stone-800 text-sm hover:bg-white dark:hover:bg-stone-900 transition-colors">
                                 <div className="flex gap-3 mb-2 md:mb-0">
-                                   <div className={`mt-1 w-2 h-2 rounded-full ${isPaid ? 'bg-emerald-500' : 'bg-amber-500'}`}></div>
+                                   <div className={`mt-1.5 w-2 h-2 rounded-full ${isPaid ? 'bg-emerald-500' : (isZeroValue ? 'bg-blue-400' : 'bg-amber-500')}`}></div>
                                    <div>
                                       <div className="font-medium text-stone-700 dark:text-stone-300 flex items-center gap-2">
                                           {com.service_name || 'Serviço'}
-                                          {/* 🔥 BADGE AZUL PARA PACOTE */}
                                           {isZeroValue && (
                                               <Badge variant="secondary" className="h-5 px-1.5 text-[10px] bg-blue-50 text-blue-700 border-blue-100 hover:bg-blue-100 flex items-center gap-1">
-                                                  <Package className="w-3 h-3" /> Pacote / Combo
+                                                  <Package className="w-3 h-3" /> Incluso / Pacote
                                               </Badge>
                                           )}
                                       </div>
                                       <div className="text-xs text-stone-400 flex items-center gap-1">
                                          <CalendarDays className="w-3 h-3" /> {format(dateObj, 'dd/MM/yyyy')}
                                          <span className="mx-1">•</span>
-                                         {com.commission_percentage}%
-                                      </div>
-                                      {/* 🔥 MOSTRA O VALOR BASE (TRANSPARÊNCIA FINANCEIRA) */}
-                                      <div className="text-[10px] text-stone-400 mt-1">
-                                          Valor Base: R$ {(com.service_price_centavos/100).toFixed(2)}
+                                         Base: R$ {(com.service_price_centavos/100).toFixed(2)}
                                       </div>
                                    </div>
                                 </div>
@@ -841,7 +830,7 @@ export default function Staff() {
                                 <div className="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
                                    <div className="text-right">
                                       <div className={`font-bold ${isZeroValue ? 'text-stone-400' : 'text-stone-700 dark:text-stone-200'}`}>
-                                          {isZeroValue ? "Sessão" : `R$ ${(com.commission_amount_centavos/100).toFixed(2)}`}
+                                          {isZeroValue ? "Registro" : `R$ ${(com.commission_amount_centavos/100).toFixed(2)}`}
                                       </div>
                                       {isPaid && com.payment_date && <div className="text-[10px] text-emerald-600">Pago em {format(new Date(com.payment_date + 'T12:00:00'), 'dd/MM')}</div>}
                                    </div>
@@ -856,7 +845,8 @@ export default function Staff() {
                                              <Button size="icon" variant="ghost" className="h-8 w-8 text-stone-400 hover:text-[#C6A87C]"><MoreHorizontal className="w-4 h-4" /></Button>
                                           </DropdownMenuTrigger>
                                           <DropdownMenuContent align="end">
-                                             {!isPaid && (
+                                             {/* 🔥 ESCONDE PAGAMENTO SE FOR VALOR ZERO */}
+                                             {!isPaid && !isZeroValue && (
                                                 <DropdownMenuItem onClick={() => updateCommissionStatus.mutate({ id: com.id, status: 'pago', payment_date: format(new Date(), 'yyyy-MM-dd') })}>
                                                    <CheckCircle2 className="w-4 h-4 mr-2 text-emerald-600" /> Confirmar Pagamento
                                                 </DropdownMenuItem>

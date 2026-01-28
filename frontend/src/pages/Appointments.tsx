@@ -12,7 +12,9 @@ import {
   CalendarDays,
   AlertCircle,
   Wallet,
-  CheckCircle2
+  CheckCircle2,
+  Info,
+  Gift // Importado Gift
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -30,20 +32,11 @@ import { PaymentConfirmationModal } from "@/components/PaymentConfirmationModal"
 import { format, parseISO, setHours, setMinutes, isSameDay, addMinutes, getDay, addDays, startOfDay, isBefore, areIntervalsOverlapping, getHours, getMinutes, isValid } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { toast } from "sonner";
+import api from "@/services/api"; // Importação da api default
 import { appointmentsAPI, customersAPI, staffAPI, servicesAPI, locationsAPI, staffServicesAPI, staffShiftsAPI, promotionsAPI } from "@/services/api";
 
 // --- TIPOS ---
 type AppointmentStatus = "confirmed" | "completed" | "cancelled" | "pending";
-
-// Adicionei a interface que faltava aqui 👇
-interface StaffShift { 
-  id?: number; 
-  staff_id: string; 
-  location_id: string; 
-  weekday: number; 
-  start_time: string; 
-  end_time: string; 
-}
 
 interface AppointmentFromAPI { 
   id: string; 
@@ -59,6 +52,7 @@ interface AppointmentFromAPI {
   service?: string; 
   location?: string; 
   final_amount_centavos?: number;
+  service_price?: number; 
 }
 
 interface ProcessedAppointment { 
@@ -76,40 +70,17 @@ interface ProcessedAppointment {
   endTime: Date;
 }
 
-// --- COMPONENTE AUXILIAR: PREVISÃO DE PACOTE ---
-function PackagePreview({ startDate, totalSessions, interval }: { startDate: Date | undefined, totalSessions: number, interval: number }) {
-    const dates = useMemo(() => {
-        if (!startDate || totalSessions <= 0) return [];
-        return Array.from({ length: totalSessions }).map((_, i) => addDays(startDate, i * interval));
-    }, [startDate, totalSessions, interval]);
-
-    if (!startDate) return null;
-
-    return (
-        <div className="bg-stone-50 border border-stone-200 rounded-lg p-3 mt-2">
-            <p className="text-xs font-bold text-stone-500 uppercase mb-2 flex items-center gap-2">
-               <CalendarDays className="w-3 h-3"/> Previsão das Sessões ({totalSessions})
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[150px] overflow-y-auto pr-1">
-                {dates.map((date, idx) => (
-                    <div key={idx} className="flex items-center gap-2 text-xs bg-white p-2 rounded border border-stone-100 shadow-sm">
-                        <span className="font-bold text-[#C6A87C] w-5">{idx + 1}ª</span>
-                        <span className="text-stone-600">{format(date, "dd/MM (EEE)", { locale: ptBR })}</span>
-                    </div>
-                ))}
-            </div>
-        </div>
-    )
-}
-
 export default function Appointments() {
   const queryClient = useQueryClient();
   
-  // Lê o parametro da URL (ex: ?date=2023-12-25)
+  // 🔥 LÓGICA DE URL (INDICAÇÃO E PARCERIA)
   const searchParams = new URLSearchParams(window.location.search);
   const urlDate = searchParams.get('date');
-  
-  // Se tiver data na URL, usa ela. Se não, usa Hoje.
+  const referralCode = searchParams.get('ind'); // Link do Cliente (?ind=...)
+  const partnerSlug = searchParams.get('parceria'); // Link B2B (?parceria=...)
+
+  const [referrer, setReferrer] = useState<any>(null); // Quem indicou
+
   const initialDate = useMemo(() => {
       if (urlDate) {
           const parsed = parseISO(urlDate);
@@ -120,13 +91,37 @@ export default function Appointments() {
 
   const [selectedDate, setSelectedDate] = useState<Date>(initialDate);
   
-  // Atualiza se a URL mudar (opcional, para navegação interna funcionar bem)
+  // 1. EFEITO: Se tiver código na URL, busca quem é a cliente que indicou
+  useEffect(() => {
+      if (referralCode) {
+          // Nota: Assumindo que customersAPI tem o método getByReferralCode. 
+          // Se não tiver, você precisará adicionar no services/api.ts ou usar api.get direto.
+          api.get(`/customers/referral/${referralCode}`) // Fallback usando api direto caso não tenha no service
+              .then(res => {
+                  const data = res.data;
+                  setReferrer(data);
+                  toast.success(`Indicação de ${data.full_name || data.name} aplicada!`);
+                  
+                  // Se o modal estiver fechado, talvez abrir? Ou apenas guardar o estado.
+                  // Aqui preenchemos o formData caso o modal seja aberto depois.
+                  setFormData(prev => ({
+                      ...prev, 
+                      notes: prev.notes ? `${prev.notes}\nIndicado por: ${data.full_name} (${data.phone})` : `Indicado por: ${data.full_name || data.name}`
+                  }));
+                  // Opcional: Abrir o modal automaticamente se tiver indicação
+                  setIsModalOpen(true);
+              })
+              .catch(() => console.log("Código de indicação inválido"));
+      }
+  }, [referralCode]);
+
   useEffect(() => {
       if (urlDate) {
           const parsed = parseISO(urlDate);
           if (isValid(parsed)) setSelectedDate(parsed);
       }
   }, [urlDate]);
+
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const [selectedStaffFilter, setSelectedStaffFilter] = useState<string>("all");
   const [selectedLocationFilter, setSelectedLocationFilter] = useState<string>("all");
@@ -136,15 +131,14 @@ export default function Appointments() {
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [appointmentToPay, setAppointmentToPay] = useState<any>(null);
   
-  const [agendamentoType, setAgendamentoType] = useState<"avulso" | "combo" | "pacote">("avulso");
+  const [agendamentoType, setAgendamentoType] = useState<"avulso" | "combo" | "package">("avulso");
   
   const [formData, setFormData] = useState({
     customer: "", customerName: "", customerPhone: "", 
     service: "", staff: "", location: "", promotion: "",
     date: undefined as Date | undefined,
     time: "", notes: "", 
-    staffMapping: {} as Record<number, string>,
-    packageDates: [] as Date[]
+    staffMapping: {} as Record<number, string>
   });
 
   const { data: appointments = [], isLoading } = useQuery<any[]>({ queryKey: ['appointments'], queryFn: appointmentsAPI.getAll });
@@ -153,10 +147,61 @@ export default function Appointments() {
   const { data: services = [] } = useQuery<any[]>({ queryKey: ['services'], queryFn: servicesAPI.getAll });
   const { data: locations = [] } = useQuery<any[]>({ queryKey: ['locations'], queryFn: locationsAPI.getAll });
   const { data: staffServices = [] } = useQuery<any[]>({ queryKey: ['staffServices'], queryFn: staffServicesAPI.getAll });
-  const { data: staffShifts = [] } = useQuery<StaffShift[]>({ queryKey: ['staffShifts'], queryFn: staffShiftsAPI.getAll });
+  const { data: staffShifts = [] } = useQuery<any[]>({ queryKey: ['staffShifts'], queryFn: staffShiftsAPI.getAll });
   const { data: promotions = [] } = useQuery<any[]>({ queryKey: ['promotions'], queryFn: promotionsAPI.getAll });
 
   // --- LÓGICA DE NEGÓCIO ---
+  const packageSchedulePreview = useMemo(() => {
+      if (agendamentoType !== 'package' || !formData.promotion || !formData.date) return [];
+      
+      const promo = promotions.find((p:any) => p.id === formData.promotion);
+      if (!promo) return [];
+
+      let currentDate = formData.date;
+      const schedule: any[] = [];
+
+      let expandedItems: any[] = [];
+      
+      if (promo.items.length > 1 && promo.items.some((i:any) => i.is_linked_to_previous !== undefined)) {
+          expandedItems = promo.items;
+      } else {
+          promo.items.forEach((item: any) => {
+              for(let i=0; i < (item.quantity || 1); i++) {
+                  expandedItems.push({
+                      ...item,
+                      is_linked_to_previous: i === 0 ? (item.is_linked_to_previous || false) : true, 
+                      custom_interval: i === 0 ? (item.custom_interval || 0) : 0
+                  });
+              }
+          });
+      }
+
+      expandedItems.forEach((item: any, idx: number) => {
+          const srv = services.find((s:any) => s.id === (item.service || item.service_id));
+          
+          if (idx > 0) {
+              if (item.is_linked_to_previous) {
+                  // Mantém a mesma data
+              } else {
+                  const daysToAdd = item.custom_interval > 0 ? item.custom_interval : 7;
+                  currentDate = addDays(currentDate, daysToAdd);
+                  if (getDay(currentDate) === 0) currentDate = addDays(currentDate, 1);
+              }
+          }
+
+          schedule.push({
+              index: idx + 1,
+              date: currentDate,
+              serviceName: srv?.name || "Serviço",
+              isLinked: item.is_linked_to_previous,
+              serviceId: srv?.id,
+              duration: Number(srv?.default_duration_min) || 30
+          });
+      });
+
+      return schedule;
+  }, [agendamentoType, formData.promotion, formData.date, promotions, services]);
+
 
   const getQualifiedStaff = (serviceId: string) => {
       const qualifiedIds = staffServices
@@ -173,15 +218,15 @@ export default function Appointments() {
   };
 
   const availableStaffSimple = useMemo(() => {
-     if (agendamentoType === 'avulso' && formData.service) {
-         return getQualifiedStaff(formData.service);
-     }
-     if (agendamentoType === 'pacote' && formData.promotion) {
+     if (agendamentoType === 'avulso' && formData.service) return getQualifiedStaff(formData.service);
+     
+     if ((agendamentoType === 'package' || agendamentoType === 'combo') && formData.promotion) {
          const promo = promotions.find((p:any) => p.id === formData.promotion);
          const firstItem = promo?.items?.[0];
          const serviceId = firstItem?.service || firstItem?.service_id;
          if (serviceId) return getQualifiedStaff(serviceId);
      }
+     
      if (formData.location) {
          const staffInLocation = new Set(staffShifts
             .filter((shift: any) => String(shift.location_id) === String(formData.location))
@@ -191,7 +236,6 @@ export default function Appointments() {
      return staffList;
   }, [agendamentoType, formData.service, formData.promotion, formData.location, staffServices, staffShifts, promotions, staffList]);
 
-  // 2. Validação de Data (Escala + Local)
   const isDateDisabledCheck = (date: Date, staffId?: string) => {
     if (isBefore(date, startOfDay(new Date()))) return true;
     if (!formData.location) return false; 
@@ -213,68 +257,69 @@ export default function Appointments() {
   
   const isDateDisabled = (date: Date) => {
       if (!editingAppointment && isBefore(date, startOfDay(new Date()))) return true;
-      
-      if (agendamentoType === 'combo' && formData.promotion) {
-          const promo = promotions.find((p:any) => p.id === formData.promotion);
-          if (!promo) return true;
-          
-          const allStaffsSelected = promo.items.every((_: any, idx: number) => !!formData.staffMapping[idx]);
-          
-          if (!allStaffsSelected) return false; 
-
-          return !promo.items.every((_: any, idx: number) => {
-             const staffId = formData.staffMapping[idx];
-             return !isDateDisabledCheck(date, staffId);
-          });
-      }
-      return isDateDisabledCheck(date);
+      return isDateDisabledCheck(date, formData.staffMapping[0] || formData.staff);
   };
 
-  // 3. Cálculo de Horários Disponíveis
   const availableTimeSlots = useMemo(() => {
       if (!formData.date || !formData.location) return [];
       const jsDay = getDay(formData.date);
       const dbDay = jsDay === 0 ? 7 : jsDay;
 
-      // ==========================================
-      // LÓGICA PARA COMBO (ENCADEAMENTO)
-      // ==========================================
-      if (agendamentoType === 'combo' && formData.promotion) {
+      // === LÓGICA DE COMBO / PACOTE ===
+      if ((agendamentoType === 'combo' || agendamentoType === 'package') && formData.promotion) {
           const promo = promotions.find((p:any) => p.id === formData.promotion);
           if (!promo || !promo.items) return [];
 
-          const allStaffsSelected = promo.items.every((_: any, idx: number) => !!formData.staffMapping[idx]);
-          if (!allStaffsSelected) return [];
-
-          const sequence: any[] = [];
-          promo.items.forEach((item: any, idx: number) => {
-              const srv = services.find((s:any) => s.id === (item.service || item.service_id));
-              const staffId = formData.staffMapping[idx];
-              if (srv && staffId) {
-                  for (let q = 0; q < (item.quantity || 1); q++) {
-                      sequence.push({
-                          service: srv,
-                          staffId: staffId,
-                          duration: Number(srv.default_duration_min) || 30
-                      });
-                  }
+          let sequence: any[] = [];
+          
+          if (promo.items.length > 1 && promo.items.some((i:any) => i.is_linked_to_previous !== undefined)) {
+              let currentChain = [promo.items[0]];
+              for(let i=1; i<promo.items.length; i++) {
+                  if(promo.items[i].is_linked_to_previous) currentChain.push(promo.items[i]);
+                  else break; 
               }
-          });
+              sequence = currentChain.map((item:any, idx) => {
+                  const srv = services.find((s:any) => s.id === (item.service || item.service_id));
+                  return {
+                      service: srv,
+                      staffId: agendamentoType === 'combo' ? (formData.staffMapping[idx] || formData.staff) : formData.staff,
+                      duration: Number(srv?.default_duration_min) || 30
+                  };
+              });
+
+          } else {
+              let globalIdx = 0;
+              promo.items.forEach((item: any) => {
+                  const srv = services.find((s:any) => s.id === (item.service || item.service_id));
+                  if (srv) {
+                      for (let q = 0; q < (item.quantity || 1); q++) {
+                          sequence.push({
+                              service: srv,
+                              staffId: agendamentoType === 'combo' ? (formData.staffMapping[globalIdx] || formData.staff) : formData.staff,
+                              duration: Number(srv.default_duration_min) || 30
+                          });
+                          globalIdx++;
+                      }
+                  }
+              });
+          }
 
           if (sequence.length === 0) return [];
 
           const firstStaffId = sequence[0].staffId;
-          const firstShifts = staffShifts.filter((s: any) => 
+          if (!firstStaffId) return [];
+
+          const shifts = staffShifts.filter((s: any) => 
               String(s.staff_id) === String(firstStaffId) && 
               Number(s.weekday) === dbDay && 
               String(s.location_id) === String(formData.location)
           );
 
-          if (firstShifts.length === 0) return null; 
+          if (shifts.length === 0) return null;
 
           const validSlots = new Set<string>();
 
-          firstShifts.forEach((shift: any) => {
+          shifts.forEach((shift: any) => {
               const [startH, startM] = shift.start_time.split(':').map(Number);
               const [endH, endM] = shift.end_time.split(':').map(Number);
               
@@ -294,23 +339,26 @@ export default function Appointments() {
                   for (let i = 0; i < sequence.length; i++) {
                       const step = sequence[i];
                       const serviceEnd = addMinutes(chainTime, step.duration);
+                      const currentStaffId = step.staffId;
+                      
+                      if (!currentStaffId) { isChainValid = false; break; }
+
+                      const timeStringStart = format(chainTime, 'HH:mm:ss');
+                      const timeStringEnd = format(serviceEnd, 'HH:mm:ss');
 
                       const hasShift = staffShifts.some((s: any) => 
-                          String(s.staff_id) === String(step.staffId) && 
+                          String(s.staff_id) === String(currentStaffId) && 
                           Number(s.weekday) === dbDay && 
                           String(s.location_id) === String(formData.location) &&
-                          s.start_time <= format(chainTime, 'HH:mm:ss') && 
-                          s.end_time >= format(serviceEnd, 'HH:mm:ss')
+                          s.start_time <= timeStringStart && 
+                          s.end_time >= timeStringEnd
                       );
 
-                      if (!hasShift) { 
-                          isChainValid = false; 
-                          break; 
-                      }
+                      if (!hasShift) { isChainValid = false; break; }
 
                       const hasConflict = appointments.some((app: any) => {
                           if (app.status === 'cancelled') return false;
-                          if (String(app.staff) !== String(step.staffId)) return false;
+                          if (String(app.staff) !== String(currentStaffId)) return false;
                           try {
                               const appStart = parseISO(app.start_time);
                               const appEnd = parseISO(app.end_time);
@@ -319,10 +367,7 @@ export default function Appointments() {
                           } catch { return false; }
                       });
 
-                      if (hasConflict) { 
-                          isChainValid = false; 
-                          break; 
-                      }
+                      if (hasConflict) { isChainValid = false; break; }
 
                       chainTime = serviceEnd;
                   }
@@ -338,7 +383,7 @@ export default function Appointments() {
           return Array.from(validSlots).sort();
       }
 
-      // --- CASO AVULSO / PACOTE ---
+      // === LÓGICA DE AVULSO ===
       if (!formData.staff) return [];
       
       const shifts = staffShifts.filter((s: any) => 
@@ -347,32 +392,19 @@ export default function Appointments() {
           Number(s.weekday) === dbDay 
       );
 
-      if (shifts.length === 0) return null; 
+      if (shifts.length === 0) return null;
 
-      let duration = 60;
-      if (agendamentoType === 'avulso' && formData.service) {
-          const srv = services.find((s:any) => s.id === formData.service);
-          if (srv) duration = Number(srv.default_duration_min) || 30;
-      } else if (agendamentoType === 'pacote' && formData.promotion) {
-          const promo = promotions.find((p:any) => p.id === formData.promotion);
-          if (promo?.items) {
-             const firstItem = promo.items[0];
-             const srv = services.find((s:any) => s.id === (firstItem.service || firstItem.service_id));
-             duration = Number(srv?.default_duration_min) || 60;
-          }
-      }
+      const srv = services.find((s:any) => s.id === formData.service);
+      const duration = Number(srv?.default_duration_min) || 30;
 
       const slots: string[] = [];
       shifts.forEach((shift: any) => {
           const [startH, startM] = shift.start_time.split(':').map(Number);
           const [endH, endM] = shift.end_time.split(':').map(Number);
           let current = setMinutes(setHours(formData.date!, startH), startM);
-          const endShift = setMinutes(setHours(formData.date!, endH), endM);
+          let endShift = setMinutes(setHours(formData.date!, endH), endM);
 
-          let adjustedEndShift = endShift;
-          if (endH < startH) {
-              adjustedEndShift = addDays(endShift, 1);
-          }
+          if (endH < startH) endShift = addDays(endShift, 1);
 
           if (isSameDay(formData.date!, new Date()) && isBefore(current, new Date())) {
               const now = new Date();
@@ -381,9 +413,8 @@ export default function Appointments() {
           }
 
           let iterations = 0;
-          while (addMinutes(current, duration) <= adjustedEndShift && iterations < 50) {
+          while (addMinutes(current, duration) <= endShift && iterations < 50) {
               const slotEnd = addMinutes(current, duration);
-              
               const hasConflict = appointments.some((app: any) => {
                   try {
                       if (app.status === 'cancelled') return false;
@@ -403,33 +434,7 @@ export default function Appointments() {
       });
       return Array.from(new Set(slots)).sort();
 
-  }, [formData.date, formData.staff, formData.location, formData.service, formData.promotion, formData.staffMapping, staffShifts, appointments, services, promotions, agendamentoType, editingAppointment]);
-
-  useEffect(() => {
-    if (agendamentoType !== 'pacote' || !formData.promotion || !formData.date || !formData.staff || !formData.location) return;
-    
-    const promo = promotions.find((p:any) => p.id === formData.promotion);
-    if (!promo) return;
-
-    const totalSessions = promo.items.reduce((acc: number, item: any) => acc + (item.quantity || 1), 0);
-    const interval = promo.suggested_interval_days || 7;
-
-    const sessions: { date: Date; valid: boolean }[] = [];
-    let currentDate = formData.date;
-    sessions.push({ date: currentDate, valid: true });
-
-    for (let i = 1; i < totalSessions; i++) {
-        let nextDate = addDays(currentDate, interval);
-        let attempts = 0;
-        while (isDateDisabledCheck(nextDate, formData.staff) && attempts < 60) { 
-            nextDate = addDays(nextDate, 1);
-            attempts++;
-        }
-        sessions.push({ date: nextDate, valid: true }); 
-        currentDate = nextDate;
-    }
-    setFormData(prev => ({ ...prev, packageDates: sessions.map(s => s.date) }));
-  }, [agendamentoType, formData.promotion, formData.date, formData.staff, formData.location]);
+  }, [formData.date, formData.staff, formData.staffMapping, formData.location, formData.service, formData.promotion, staffShifts, appointments, services, agendamentoType, editingAppointment]);
 
 
   const processedAppointments: ProcessedAppointment[] = useMemo(() => {
@@ -501,6 +506,18 @@ export default function Appointments() {
     }
   });
 
+  const payMutation = useMutation({
+    mutationFn: ({ id, data }: any) => appointmentsAPI.pay(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['appointments'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-flow'] }); 
+      queryClient.invalidateQueries({ queryKey: ['accounts'] });
+      setPaymentModalOpen(false);
+      toast.success("Pagamento confirmado e saldo atualizado!");
+    },
+    onError: () => toast.error("Erro ao processar pagamento.")
+  });
+
   const deleteMutation = useMutation({
     mutationFn: appointmentsAPI.delete,
     onSuccess: () => {
@@ -536,7 +553,7 @@ export default function Appointments() {
         customer: formData.customer === "new" ? undefined : formData.customer,
         customer_name: formData.customer === "new" ? formData.customerName : undefined,
         customer_phone: formData.customer === "new" ? formData.customerPhone : undefined,
-        staff: formData.staff,
+        staff: formData.staff, 
         location: formData.location,
         status: "confirmed"
     };
@@ -562,101 +579,70 @@ export default function Appointments() {
             createMutation.mutate(payload, { onSuccess: () => { setIsModalOpen(false); toast.success("Agendamento criado!"); }});
         }
     } 
-    // --- CORREÇÃO DO COMBO (PREÇO DIRETO) ---
-    else if (agendamentoType === "combo") {
+    else if (agendamentoType === "combo" || agendamentoType === "package") {
         const selectedPromo = promotions.find((p:any) => p.id === formData.promotion);
         if(!selectedPromo) return;
-        
-        if (!selectedPromo.items.every((_: any, idx: number) => !!formData.staffMapping[idx])) {
-            toast.warning("Selecione o profissional para cada serviço.");
-            return;
-        }
 
-        // 🔥 CORREÇÃO: Pega o preço já com desconto da promoção, SEM multiplicar novamente.
-        const totalComboPrice = selectedPromo.price_centavos; 
-
-        // Monta a sequência expandida
-        const sequence: any[] = [];
-        selectedPromo.items.forEach((item: any, idx: number) => {
-            const srv = services.find((s:any) => s.id === (item.service || item.service_id));
-            const staffId = formData.staffMapping[idx];
-            if (srv && staffId) {
-                for (let q = 0; q < (item.quantity || 1); q++) {
-                    sequence.push({
-                        service: srv,
-                        staffId: staffId,
-                        duration: Number(srv.default_duration_min) || 30
-                    });
-                }
-            }
-        });
-
-        let currentStart = startDateTime;
-        for (let i = 0; i < sequence.length; i++) {
-            const step = sequence[i];
-            const currentEnd = addMinutes(currentStart, step.duration);
-            
-            const itemNotes = i === 0 
-                ? `[Combo: ${selectedPromo.title}] ${formData.notes}` 
-                : `[Combo: ${selectedPromo.title} - Item ${i+1}] ${formData.notes}`;
-            
-            // Apenas a 1ª sessão recebe o valor total
-            const itemPrice = i === 0 ? totalComboPrice : 0;
-
-            await createMutation.mutateAsync({
-                ...commonPayload,
-                service: step.service.id,
-                staff: step.staffId,
-                start_time: currentStart.toISOString(),
-                end_time: currentEnd.toISOString(),
-                notes: itemNotes,
-                final_amount_centavos: itemPrice 
-            });
-            currentStart = currentEnd;
-        }
-        setIsModalOpen(false);
-        toast.success("Combo agendado com sucesso!");
-    }
-    // --- CORREÇÃO DO PACOTE (PREÇO DIRETO) ---
-    else if (agendamentoType === "pacote") {
-        const selectedPromo = promotions.find((p:any) => p.id === formData.promotion);
-        if(!selectedPromo) return;
-        
-        const packageServiceSequence: any[] = [];
-        selectedPromo.items.forEach((item: any) => {
-             const srv = services.find((s:any) => s.id === (item.service || item.service_id));
-             if (srv) {
-                 for (let q = 0; q < item.quantity; q++) {
-                     packageServiceSequence.push(srv);
-                 }
-             }
-        });
-
-        // 🔥 CORREÇÃO: Pega o preço já com desconto da promoção, SEM multiplicar novamente.
         const totalPackagePrice = selectedPromo.price_centavos;
+        
+        let itemsToSchedule: any[] = [];
+        if (agendamentoType === 'package') {
+            itemsToSchedule = packageSchedulePreview;
+        } else {
+             selectedPromo.items.forEach((item: any) => {
+                  const srv = services.find((s:any) => s.id === (item.service || item.service_id));
+                  for (let q = 0; q < (item.quantity || 1); q++) {
+                      itemsToSchedule.push({
+                          serviceId: srv.id,
+                          serviceName: srv.name,
+                          duration: srv.default_duration_min || 30
+                      });
+                  }
+             });
+        }
 
-        for (let i = 0; i < formData.packageDates.length; i++) {
-            const currentService = packageServiceSequence[i] || packageServiceSequence[packageServiceSequence.length - 1];
+        let currentStartTime = startDateTime;
+
+        for (let i = 0; i < itemsToSchedule.length; i++) {
+            const item = itemsToSchedule[i];
             
-            const sessionDate = formData.packageDates[i];
-            const sessionStart = setMinutes(setHours(sessionDate, hours), minutes);
-            const sessionEnd = addMinutes(sessionStart, Number(currentService.default_duration_min) || 60);
-            
-            const sessionNotes = `[Pacote: ${selectedPromo.title} - Sessão ${i+1}/${formData.packageDates.length} - ${currentService.name}] ${formData.notes}`;
-            
-            const sessionPrice = i === 0 ? totalPackagePrice : 0;
+            if (agendamentoType === 'package' && i > 0 && !item.isLinked) {
+                currentStartTime = setMinutes(setHours(item.date, hours), minutes);
+            }
+
+            const duration = item.duration || 30;
+            const currentEndTime = addMinutes(currentStartTime, duration);
+
+            let itemNotes = "";
+            if (agendamentoType === 'package') {
+                const tag = `[Pacote: ${selectedPromo.title} - Sessão ${i+1}/${itemsToSchedule.length}]`;
+                const extra = i === 0 ? formData.notes : `Serviço: ${item.serviceName}`;
+                itemNotes = `${tag} ${extra}`;
+            } else {
+                itemNotes = i === 0 
+                    ? `[Combo: ${selectedPromo.title}] ${formData.notes}` 
+                    : `[Combo Item: ${item.serviceName}]`;
+            }
+
+            const itemPrice = i === 0 ? totalPackagePrice : 0;
+            const stepStaff = agendamentoType === 'combo' ? (formData.staffMapping[i] || formData.staff) : formData.staff;
 
             await createMutation.mutateAsync({
                 ...commonPayload,
-                service: currentService.id, 
-                start_time: sessionStart.toISOString(),
-                end_time: sessionEnd.toISOString(),
-                notes: sessionNotes,
-                final_amount_centavos: sessionPrice
+                service: item.serviceId, 
+                staff: stepStaff, 
+                start_time: currentStartTime.toISOString(),
+                end_time: currentEndTime.toISOString(),
+                notes: itemNotes,
+                final_amount_centavos: itemPrice
             });
+
+            if (agendamentoType === 'combo') {
+                currentStartTime = currentEndTime;
+            }
         }
         setIsModalOpen(false);
-        toast.success("Pacote recorrente agendado!");
+        toast.success(`${agendamentoType === 'combo' ? 'Combo' : 'Pacote'} agendado com sucesso!`);
     }
   };
 
@@ -669,7 +655,7 @@ export default function Appointments() {
       promotion: "",
       date: undefined, 
       time: "", notes: "",
-      staffMapping: {}, packageDates: []
+      staffMapping: {}, 
     });
     setIsModalOpen(true);
   };
@@ -691,7 +677,7 @@ export default function Appointments() {
           date: startDate,
           time: isValid(startDate) ? format(startDate, "HH:mm") : "",
           notes: data.notes || "",
-          staffMapping: {}, packageDates: []
+          staffMapping: {}, 
       });
       setIsModalOpen(true);
   };
@@ -705,9 +691,8 @@ export default function Appointments() {
           setAppointmentToPay(editingAppointment);
           setPaymentModalOpen(true);
       } else {
-          if (confirm("Este item não possui valor a receber. Deseja concluir a sessão?")) {
-              updateMutation.mutate({ id: editingAppointment.id, data: { status: 'completed' } });
-          }
+          setAppointmentToPay(editingAppointment);
+          setPaymentModalOpen(true);
       }
   };
 
@@ -811,12 +796,26 @@ export default function Appointments() {
             </DialogHeader>
             <div className="grid gap-4 py-4">
                 
+                {/* 🔥 BANNER DE INDICAÇÃO (NOVO) */}
+                {referrer && !editingAppointment && (
+                    <div className="bg-blue-50 border border-blue-100 p-3 rounded-xl flex items-center gap-3 mb-2 animate-in fade-in slide-in-from-top-2">
+                        <div className="bg-blue-100 p-2 rounded-full text-blue-600">
+                            <Gift className="w-4 h-4" />
+                        </div>
+                        <div>
+                            <p className="text-xs font-bold text-blue-700">Cliente Indicado por:</p>
+                            <p className="text-sm text-blue-900 font-medium">{referrer.full_name || referrer.name}</p>
+                        </div>
+                        <CheckCircle2 className="w-5 h-5 text-blue-500 ml-auto"/>
+                    </div>
+                )}
+
                 {!editingAppointment && (
                     <Tabs value={agendamentoType} onValueChange={(v:any) => { setAgendamentoType(v); setFormData(f => ({...f, promotion: '', service: '', staffMapping: {}, staff: '', packageDates: []})); }} className="w-full">
                         <TabsList className="grid w-full grid-cols-3">
                             <TabsTrigger value="avulso"><Clock className="w-3 h-3 mr-2"/> Avulso</TabsTrigger>
                             <TabsTrigger value="combo"><Sparkles className="w-3 h-3 mr-2"/> Combo</TabsTrigger>
-                            <TabsTrigger value="pacote"><Repeat className="w-3 h-3 mr-2"/> Pacote</TabsTrigger>
+                            <TabsTrigger value="package"><Repeat className="w-3 h-3 mr-2"/> Pacote</TabsTrigger>
                         </TabsList>
                     </Tabs>
                 )}
@@ -848,111 +847,78 @@ export default function Appointments() {
                     </div>
                 )}
 
-                {/* ABA 2: COMBO (MULTI-PROFISSIONAL) */}
-                {agendamentoType === 'combo' && (
+                {(agendamentoType === 'combo' || agendamentoType === 'package') && (
                     <div className="space-y-4 border p-4 rounded-xl bg-stone-50/50">
                         <div className="space-y-1">
                             <Label className="text-[#C6A87C] text-xs uppercase tracking-wider font-bold flex items-center gap-1">
-                                <Sparkles className="w-3 h-3"/> Combo Promocional
+                                {agendamentoType === 'combo' ? <Sparkles className="w-3 h-3"/> : <Package className="w-3 h-3"/>}
+                                {agendamentoType === 'combo' ? 'Combo Promocional' : 'Pacote Recorrente'}
                             </Label>
-                            <Select value={formData.promotion} onValueChange={(v) => setFormData({...formData, promotion: v, staffMapping: {}})}>
-                                <SelectTrigger className="bg-white border-[#C6A87C]/30"><SelectValue placeholder="Escolha a promoção..." /></SelectTrigger>
+                            <Select value={formData.promotion} onValueChange={(v) => setFormData({...formData, promotion: v, staffMapping: {}, staff: ''})}>
+                                <SelectTrigger className="bg-white border-[#C6A87C]/30"><SelectValue placeholder="Escolha..." /></SelectTrigger>
                                 <SelectContent>
-                                    {promotions.filter((p:any) => p.type === 'combo').map((p:any) => (
+                                    {promotions.filter((p:any) => p.type === agendamentoType).map((p:any) => (
                                         <SelectItem key={p.id} value={p.id}>{p.title} (R$ {(p.price_centavos/100).toFixed(2)})</SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
                         </div>
-                        
-                        {formData.promotion && (
-                            <div className="space-y-3 mt-2">
-                                <p className="text-[10px] font-bold text-stone-400 uppercase">Selecione os profissionais</p>
-                                {promotions.find((p:any) => p.id === formData.promotion)?.items.map((item: any, idx: number) => {
-                                    const serviceName = services.find((s:any) => s.id === (item.service || item.service_id))?.name || "Serviço";
-                                    const staffOptions = getQualifiedStaff(item.service || item.service_id);
+
+                        {/* SELEÇÃO DE PROFISSIONAIS (MÚLTIPLA SE COMBO) */}
+                        {agendamentoType === 'combo' && formData.promotion && (
+                             <div className="space-y-2 mt-2 bg-white p-2 rounded-lg border">
+                                <Label className="text-xs font-bold text-stone-400 uppercase mb-2 block">Defina os profissionais:</Label>
+                                {(() => {
+                                    const promo = promotions.find((p:any) => p.id === formData.promotion);
+                                    if(!promo) return null;
+                                    let itemsRender: any[] = [];
+                                    promo.items.forEach((item: any) => {
+                                        const srv = services.find((s:any) => s.id === (item.service || item.service_id));
+                                        for(let i=0; i<(item.quantity || 1); i++) {
+                                            itemsRender.push({ name: srv?.name, id: srv?.id });
+                                        }
+                                    });
                                     
-                                    return (
-                                        <div key={idx} className="grid grid-cols-2 gap-2 items-center bg-white p-2 rounded border border-stone-100">
-                                            <span className="text-xs font-medium text-stone-700 truncate" title={serviceName}>
-                                                {idx+1}. {serviceName}
-                                            </span>
+                                    return itemsRender.map((item, idx) => (
+                                        <div key={idx} className="flex flex-col sm:flex-row gap-1 sm:items-center text-sm">
+                                            <span className="w-32 text-xs font-medium text-stone-600 truncate" title={item.name}>{idx+1}. {item.name}</span>
                                             <Select value={formData.staffMapping[idx] || ''} onValueChange={(v) => handleStaffSelect(idx, v)}>
-                                                <SelectTrigger className="h-8 text-xs border-stone-200"><SelectValue placeholder="Quem fará?" /></SelectTrigger>
+                                                <SelectTrigger className="h-8 text-xs flex-1"><SelectValue placeholder="Selecione..."/></SelectTrigger>
                                                 <SelectContent>
-                                                    {staffOptions.map((s:any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                                                    {getQualifiedStaff(item.id).map((s:any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                                                 </SelectContent>
                                             </Select>
                                         </div>
-                                    )
-                                })}
+                                    ));
+                                })()}
+                             </div>
+                        )}
+
+                        {/* Se for Pacote, mantém seleção única de staff principal */}
+                        {agendamentoType === 'package' && (
+                            <div className="space-y-1">
+                                <Label className="text-xs font-bold text-stone-500 uppercase">Profissional (Início)</Label>
+                                <Select value={formData.staff} onValueChange={(v) => setFormData({...formData, staff: v})} disabled={!formData.location}>
+                                    <SelectTrigger className="bg-white"><SelectValue placeholder="Quem vai iniciar?" /></SelectTrigger>
+                                    <SelectContent>{availableStaffSimple.map((s:any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+                                </Select>
                             </div>
                         )}
-                    </div>
-                )}
-
-                {/* ABA 3: PACOTE */}
-                {agendamentoType === 'pacote' && (
-                    <div className="space-y-4 border p-4 rounded-xl bg-stone-50/50">
-                        <div className="space-y-1">
-                            <Label className="text-[#C6A87C] text-xs uppercase tracking-wider font-bold flex items-center gap-1">
-                                <Package className="w-3 h-3"/> Pacote Recorrente
-                            </Label>
-                            <Select value={formData.promotion} onValueChange={(v) => setFormData({...formData, promotion: v, packageDates: []})}>
-                                <SelectTrigger className="bg-white border-[#C6A87C]/30"><SelectValue placeholder="Escolha a promoção..." /></SelectTrigger>
-                                <SelectContent>
-                                    {promotions.filter((p:any) => p.type === 'package').map((p:any) => (
-                                        <SelectItem key={p.id} value={p.id}>{p.title} (R$ {(p.price_centavos/100).toFixed(2)})</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-1">
-                            <Label className="text-xs font-bold text-stone-500 uppercase">Profissional Responsável</Label>
-                            <Select value={formData.staff} onValueChange={(v) => setFormData({...formData, staff: v})} disabled={!formData.location}>
-                                <SelectTrigger className="bg-white"><SelectValue placeholder="Quem vai atender?" /></SelectTrigger>
-                                <SelectContent>{availableStaffSimple.map((s:any) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-                            </Select>
-                        </div>
                         
-                        {/* PREVISÃO DE PACOTE (EDITÁVEL) */}
-                        {formData.promotion && formData.date && formData.packageDates.length > 0 && (
-                            <div className="bg-white border border-stone-200 rounded-lg p-3 mt-2">
-                                <p className="text-xs font-bold text-stone-500 uppercase mb-2 flex items-center gap-2">
-                                   <CalendarDays className="w-3 h-3"/> Datas das Sessões (Editável)
+                        {agendamentoType === 'package' && packageSchedulePreview.length > 0 && formData.date && (
+                            <div className="bg-white border border-stone-200 rounded-lg p-3 mt-2 animate-in fade-in">
+                                <p className="text-[10px] font-bold text-stone-400 uppercase mb-2 flex items-center gap-2">
+                                   <CalendarDays className="w-3 h-3"/> Cronograma Automático:
                                 </p>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[150px] overflow-y-auto pr-1">
-                                    {formData.packageDates.map((date, idx) => (
-                                        <div key={idx} className="flex items-center gap-2 text-xs bg-stone-50 p-1 rounded border border-stone-100">
-                                            <span className="font-bold text-[#C6A87C] w-5 text-center">{idx + 1}ª</span>
-                                            {/* Input para trocar data se necessário */}
-                                            <Popover>
-                                                <PopoverTrigger asChild>
-                                                    <Button variant="ghost" size="sm" className="h-6 w-full justify-start px-2 text-xs font-normal">
-                                                        {format(date, "dd/MM/yy (EEE)", { locale: ptBR })}
-                                                    </Button>
-                                                </PopoverTrigger>
-                                                <PopoverContent className="w-auto p-0">
-                                                    <Calendar 
-                                                        mode="single" 
-                                                        selected={date} 
-                                                        onSelect={(d) => {
-                                                            if (!d) return;
-                                                            // Atualiza apenas a data desta sessão
-                                                            const newDates = [...formData.packageDates];
-                                                            newDates[idx] = d;
-                                                            setFormData(f => ({...f, packageDates: newDates}));
-                                                        }} 
-                                                        disabled={(d) => isDateDisabledCheck(d, formData.staff)}
-                                                        initialFocus 
-                                                    />
-                                                </PopoverContent>
-                                            </Popover>
-                                            {isDateDisabledCheck(date, formData.staff) && (
-                                                <span title="Dia indisponível" className="ml-auto cursor-help">
-                                                    <AlertCircle className="w-3 h-3 text-red-500" />
-                                                </span>
-                                            )}
+                                <div className="space-y-2 max-h-[150px] overflow-y-auto pr-1">
+                                    {packageSchedulePreview.map((item: any, idx) => (
+                                        <div key={idx} className={`flex items-center gap-3 text-xs p-2 rounded border ${item.isLinked ? 'bg-purple-50 border-purple-100' : 'bg-stone-50 border-stone-100'}`}>
+                                            <span className="font-bold text-stone-500 w-4 text-center">{item.index}</span>
+                                            <div className="flex-1">
+                                                <p className="font-bold text-stone-700">{item.serviceName}</p>
+                                                <p className="text-[10px] text-stone-400">{format(item.date, "dd 'de' MMMM (EEE)", { locale: ptBR })} {idx === 0 && `às ${formData.time}`}</p>
+                                            </div>
+                                            {item.isLinked && <Info className="w-3 h-3 text-purple-400"/>}
                                         </div>
                                     ))}
                                 </div>
@@ -978,7 +944,6 @@ export default function Appointments() {
                     </div>
                 )}
 
-                {/* 4. DATA E HORA (COM LISTA SUSPENSA DE HORÁRIOS) */}
                 <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
                         <Label className="text-xs font-bold text-stone-500 uppercase">Data de Início</Label>
@@ -993,7 +958,7 @@ export default function Appointments() {
                                 <Calendar 
                                     mode="single" 
                                     selected={formData.date} 
-                                    onSelect={(d) => d && setFormData({...formData, date: d, time: ''})} // Reseta hora
+                                    onSelect={(d) => d && setFormData({...formData, date: d, time: ''})} 
                                     disabled={isDateDisabled} 
                                     initialFocus 
                                 />
@@ -1002,7 +967,6 @@ export default function Appointments() {
                         </Popover>
                     </div>
                     
-                    {/* 🔥 LISTA SUSPENSA DE HORÁRIOS DISPONÍVEIS */}
                     <div className="space-y-1">
                         <Label className="text-xs font-bold text-stone-500 uppercase">Horário</Label>
                         <Select value={formData.time} onValueChange={(v) => setFormData({...formData, time: v})} disabled={!formData.date || (!availableTimeSlots && !editingAppointment)}>
@@ -1033,17 +997,14 @@ export default function Appointments() {
                     <Textarea value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} className="resize-none h-20 bg-stone-50 border-stone-200" />
                 </div>
 
-                {/* BOTÕES DE STATUS (EDIÇÃO) */}
                 {editingAppointment && (
                     <div className="flex gap-2 pt-2 border-t mt-2">
-                        {/* Se pendente, confirma. Se não, permite mudar. */}
                         {editingAppointment.status === 'pending' ? (
                             <Button size="sm" variant="outline" className="flex-1 text-blue-600 border-blue-200 hover:bg-blue-50" onClick={() => handleStatusChange('confirmed')}>Confirmar Agendamento</Button>
                         ) : (
                             <Button size="sm" variant="outline" className="flex-1 text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleStatusChange('cancelled')}>Cancelar</Button>
                         )}
                         
-                        {/* Botão Inteligente: Pagar ou Concluir */}
                         <Button 
                             size="sm" 
                             variant="outline" 
@@ -1069,7 +1030,19 @@ export default function Appointments() {
         </DialogContent>
       </Dialog>
 
-      {appointmentToPay && <PaymentConfirmationModal isOpen={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} onConfirm={() => { setPaymentModalOpen(false); updateMutation.mutate({ id: appointmentToPay.id, data: { status: 'completed' } }); }} appointment={appointmentToPay} />}
+      {/* 🔥 MODAL DE PAGAMENTO INTELLIGENTE */}
+      {appointmentToPay && <PaymentConfirmationModal 
+          isOpen={paymentModalOpen} 
+          onClose={() => setPaymentModalOpen(false)} 
+          onConfirm={(paymentData: any) => { 
+              // 🔥 CORREÇÃO: Usa payMutation para processar o pagamento e saldo
+              payMutation.mutate({ 
+                  id: appointmentToPay.id, 
+                  data: paymentData 
+              }); 
+          }} 
+          appointment={appointmentToPay} 
+      />}
     </div>
   );
 }

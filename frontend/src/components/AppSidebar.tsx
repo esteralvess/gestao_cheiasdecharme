@@ -11,7 +11,8 @@ import {
   ShieldCheck, 
   Percent,
   LogOut,
-  Package // <--- Importei o ícone Package
+  Package,
+  Building2 // <--- Ícone para Parcerias
 } from "lucide-react";
 import {
   Sidebar,
@@ -32,7 +33,7 @@ import { LogoutButton } from "./LogoutButton";
 const mainMenuItems = [
   { title: "Visão Geral", url: "/dashboard", icon: Home },
   { title: "Agenda", url: "/appointments", icon: Calendar },
-  { title: "Gestão de Pacotes", url: "/packages", icon: Package }, // <--- NOVO ITEM
+  { title: "Gestão de Pacotes", url: "/packages", icon: Package },
   { title: "Clientes", url: "/customers", icon: Users },
 ];
 
@@ -40,6 +41,7 @@ const registerItems = [
   { title: "Profissionais", url: "/staff", icon: UserCog },
   { title: "Serviços", url: "/services", icon: Scissors },
   { title: "Promoções", url: "/promotions", icon: Percent },
+  { title: "Parcerias B2B", url: "/parcerias", icon: Building2 }, // <--- NOVO ITEM AQUI
   { title: "Unidades", url: "/locations", icon: MapPin },
 ];
 

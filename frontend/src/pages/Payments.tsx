@@ -1,519 +1,384 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { 
-  Card, CardContent, CardHeader, CardTitle, CardDescription 
+  Card, CardContent, CardHeader, CardTitle 
 } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
+import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { 
-  Calendar as CalendarIcon, 
-  DollarSign, 
-  Plus, 
-  Trash2, 
-  Pencil, 
-  TrendingUp, 
-  Clock, 
-  FileDown, 
-  ArrowUp, 
-  ArrowDown, 
-  Wallet, 
-  PieChart as PieChartIcon,
-  BarChart3,
-  Landmark,
-  Receipt
+  Calendar as CalendarIcon, ArrowUpCircle, ArrowDownCircle, Wallet, CreditCard,
+  Target, BarChart3, Landmark, MoreHorizontal, Tags, CheckCircle2,
+  Clock, Lightbulb, Briefcase, ShoppingBag, Megaphone, AlertTriangle,
+  Settings2, Search, Info, TrendingUp, TrendingDown, Users, Download, 
+  Pencil, Trash2, Filter, ArrowRightLeft, LayoutDashboard, List, CreditCard as CardIcon,
+  ExternalLink, CalendarDays, Rocket
 } from "lucide-react";
-import { appointmentsAPI, servicesAPI, staffAPI, locationsAPI, expensesAPI, staffCommissionsAPI } from "@/services/api";
-import { addDays, format, startOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, differenceInDays, subDays } from "date-fns";
+import { 
+    appointmentsAPI, servicesAPI, expensesAPI, staffCommissionsAPI, 
+    creditCardsAPI, categoriesAPI, accountsAPI 
+} from "@/services/api";
+import { addDays, format, startOfMonth, endOfMonth, isPast } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { DateRange } from "react-day-picker";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
-import { useLocation } from "wouter";
+import { ResponsiveContainer, AreaChart, Area, XAxis, Tooltip as RechartsTooltip, CartesianGrid, YAxis } from "recharts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { cn, formatCurrency } from "@/lib/utils";
 
-// --- Tipagem de Dados ---
-interface Appointment { id: string; customer_name: string; service_name: string; staff_name: string; start_time: string; status: "completed"; service: string; staff: string; location: string; payment_method?: 'pix' | 'credito' | 'debito' | 'dinheiro' | 'outros'; discount_centavos?: number; final_amount_centavos?: number; }
-interface Service { id: string; name: string; price_centavos?: number; }
-interface Staff { id: string; name: string; default_commission_percentage?: number; }
-interface Location { id: string; name: string; }
-interface Expense { 
-  id: string; 
-  description: string; 
-  category: string; 
-  amount_centavos: number; 
-  payment_date: string; 
-  notes?: string; 
-  type: 'fixed' | 'variable'; // ✅ Novo campo: Fixa ou Variável
-}
-interface StaffCommission { id: string; date: string; status: 'pendente_pagamento' | 'pago' | 'cancelado'; commission_amount_centavos: number; staff_id: string; }
-interface ProcessedPayment { id: string; appointmentId: string; customerName: string; serviceName: string; amount: number; paymentDate: Date; commission: number; paymentMethod: 'pix' | 'credito' | 'debito' | 'dinheiro' | 'outros'; }
+// Componentes
+import { ExpenseDialog } from "@/components/finance/ExpenseDialog";
+import { CreditCardManager } from "@/components/finance/CreditCardManager";
+import { CategoryManager } from "@/components/finance/CategoryManager";
+import { TransferDialog } from "@/components/finance/TransferDialog";
 
-// --- Componente Auxiliar para Variação Percentual ---
-function PercentageChange({ current, previous }: { current: number; previous: number }) {
-    if (previous === 0) {
-        if (current > 0) return <div className="flex items-center text-xs text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full"><ArrowUp className="w-3 h-3 mr-1" />Inf%</div>;
-        return <div className="text-xs text-muted-foreground">-</div>;
-    }
-    const change = ((current - previous) / previous) * 100;
-    const isPositive = change >= 0;
+const getCategoryIcon = (categoryName: string) => {
+    const normalized = (categoryName || '').toLowerCase();
+    if (normalized.includes('aluguel')) return Landmark;
+    if (normalized.includes('cartao')) return CreditCard;
+    if (normalized.includes('receita')) return ArrowUpCircle;
+    if (normalized.includes('transfer')) return ArrowRightLeft;
+    if (normalized.includes('comis')) return Users;
+    return Tags;
+};
 
-    return (
-        <div className={`flex items-center text-xs px-1.5 py-0.5 rounded-full ${isPositive ? 'text-emerald-600 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>
-            {isPositive ? <ArrowUp className="w-3 h-3 mr-1" /> : <ArrowDown className="w-3 h-3 mr-1" />}
-            {Math.abs(change).toFixed(1)}%
-        </div>
-    );
-}
+// --- MODAL DE BAIXA UNIVERSAL (Comissões e Despesas) ---
+function UniversalPayModal({ open, onClose, onConfirm, accounts, item }: any) {
+    const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+    const [accountId, setAccountId] = useState("");
 
-// --- Funções Auxiliares ---
-const getPreviousDateRange = (range: DateRange | undefined): DateRange | undefined => {
-    if (!range?.from) return undefined;
-    const to = range.to ?? range.from;
-    const duration = differenceInDays(to, range.from);
-    const prev_to = subDays(range.from, 1);
-    const prev_from = subDays(prev_to, duration);
-    return { from: prev_from, to: prev_to };
-}
+    // Tenta pré-selecionar conta 'Caixa' ou a primeira
+    useState(() => {
+        if (accounts && accounts.length > 0 && !accountId) {
+            const caixa = accounts.find((a:any) => a.name.toLowerCase().includes('caixa'));
+            setAccountId(caixa ? caixa.id : accounts[0].id);
+        }
+    });
 
-// --- Modal de Despesas (Atualizado com Tipo) ---
-function ExpenseModal({ expense, onClose, onSave, isSaving }: any) { 
-    const isNew = !expense?.id; 
-    const [formData, setFormData] = useState({ 
-        description: '', 
-        category: 'outros', 
-        type: 'variable' as 'fixed' | 'variable', // Padrão Variável
-        amount_reais: '0', 
-        payment_date: format(new Date(), 'yyyy-MM-dd'), 
-        notes: '' 
-    }); 
-
-    useEffect(() => { 
-        if (expense) { 
-            setFormData({ 
-                description: expense.description || '', 
-                category: expense.category || 'outros', 
-                type: expense.type || 'variable',
-                amount_reais: expense.amount_centavos ? (expense.amount_centavos / 100).toFixed(2) : '0', 
-                payment_date: expense.payment_date || format(new Date(), 'yyyy-MM-dd'), 
-                notes: expense.notes || '', 
-            }); 
-        } 
-    }, [expense]); 
-
-    if (!expense) return null; 
-
-    const handleSave = () => { 
-        const amount_centavos = Math.round(parseFloat(formData.amount_reais.replace(',', '.')) * 100); 
-        const { amount_reais, ...dataToSend } = formData; 
-        onSave({ ...expense, ...dataToSend, amount_centavos }); 
-    }; 
+    const handleConfirm = () => {
+        if (!accountId) return toast.error("Selecione a conta de origem/destino.");
+        onConfirm(item, date, accountId);
+    };
 
     return (
-        <Dialog open={!!expense} onOpenChange={onClose}>
-            <DialogContent className="sm:max-w-[500px] bg-white dark:bg-stone-950 border-stone-100 dark:border-stone-800">
+        <Dialog open={open} onOpenChange={onClose}>
+            <DialogContent className="max-w-[90%] sm:max-w-[400px] bg-white rounded-3xl">
                 <DialogHeader>
-                    <DialogTitle className="text-stone-800 dark:text-stone-100">{isNew ? 'Registrar Nova Despesa' : 'Editar Despesa'}</DialogTitle>
+                    <div className="mx-auto w-14 h-14 bg-stone-100 rounded-full flex items-center justify-center mb-3"><CheckCircle2 className="w-7 h-7 text-emerald-600"/></div>
+                    <DialogTitle className="text-center font-black text-xl">Confirmar Baixa</DialogTitle>
+                    <DialogDescription className="text-center">
+                        {item?.description} <br/>
+                        <span className="text-stone-900 font-bold text-lg mt-2 block">{item ? formatCurrency(Math.abs(item.amount) / 100) : 'R$ 0,00'}</span>
+                    </DialogDescription>
                 </DialogHeader>
                 <div className="py-4 space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                         <div className="space-y-2">
-                             <Label>Tipo de Despesa</Label>
-                             <div className="flex items-center gap-2 p-1 bg-stone-100 dark:bg-stone-900 rounded-lg">
-                                <Button 
-                                    type="button" 
-                                    variant={formData.type === 'fixed' ? 'default' : 'ghost'} 
-                                    size="sm" 
-                                    className={`flex-1 ${formData.type === 'fixed' ? 'bg-stone-700' : 'text-stone-500'}`}
-                                    onClick={() => setFormData(f => ({...f, type: 'fixed'}))}
-                                >
-                                    Fixa
-                                </Button>
-                                <Button 
-                                    type="button" 
-                                    variant={formData.type === 'variable' ? 'default' : 'ghost'} 
-                                    size="sm" 
-                                    className={`flex-1 ${formData.type === 'variable' ? 'bg-[#C6A87C] hover:bg-[#B08D55]' : 'text-stone-500'}`}
-                                    onClick={() => setFormData(f => ({...f, type: 'variable'}))}
-                                >
-                                    Variável
-                                </Button>
-                             </div>
-                         </div>
-                         <div className="space-y-2">
-                            <Label>Categoria</Label>
-                            <Select value={formData.category} onValueChange={(v) => setFormData(f => ({...f, category: v}))}>
-                                <SelectTrigger className="bg-stone-50 border-stone-200"><SelectValue/></SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="aluguel">Aluguel (Fixa)</SelectItem>
-                                    <SelectItem value="contas">Contas - Água/Luz (Fixa)</SelectItem>
-                                    <SelectItem value="salarios">Salários/Equipe</SelectItem>
-                                    <SelectItem value="produtos">Produtos/Estoque</SelectItem>
-                                    <SelectItem value="marketing">Marketing</SelectItem>
-                                    <SelectItem value="impostos">Impostos</SelectItem>
-                                    <SelectItem value="manutencao">Manutenção</SelectItem>
-                                    <SelectItem value="outros">Outros</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
+                    <div className="space-y-1.5">
+                        <Label className="text-xs font-bold text-stone-400 uppercase">Data da Baixa</Label>
+                        <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="rounded-xl h-11 border-stone-200" />
                     </div>
-
-                    <div className="space-y-2">
-                        <Label>Descrição</Label>
-                        <Input value={formData.description} onChange={e => setFormData(f => ({...f, description: e.target.value}))} className="bg-stone-50 border-stone-200"/>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                            <Label>Valor (R$)</Label>
-                            <div className="relative">
-                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 font-medium">R$</span>
-                                <Input type="number" step="0.01" className="pl-9 bg-stone-50 border-stone-200 font-bold text-lg" value={formData.amount_reais} onChange={e => setFormData(f => ({...f, amount_reais: e.target.value}))}/>
-                            </div>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Data do Pagamento</Label>
-                            <Input type="date" value={formData.payment_date} onChange={e => setFormData(f => ({...f, payment_date: e.target.value}))} className="bg-stone-50 border-stone-200"/>
-                        </div>
-                    </div>
-                    <div className="space-y-2">
-                        <Label>Observações</Label>
-                        <Textarea value={formData.notes} onChange={e => setFormData(f => ({...f, notes: e.target.value}))} className="bg-stone-50 border-stone-200 resize-none h-20"/>
+                    <div className="space-y-1.5">
+                        <Label className="text-xs font-bold text-stone-400 uppercase">Conta (Origem/Destino)</Label>
+                        <Select value={accountId} onValueChange={setAccountId}>
+                            <SelectTrigger className="h-11 rounded-xl border-stone-200"><SelectValue placeholder="Selecione" /></SelectTrigger>
+                            <SelectContent>{(accounts || []).map((acc: any) => (<SelectItem key={acc.id} value={acc.id}>{acc.name} ({formatCurrency(acc.balance_centavos/100)})</SelectItem>))}</SelectContent>
+                        </Select>
                     </div>
                 </div>
-                <DialogFooter>
-                    <Button variant="outline" onClick={onClose} disabled={isSaving}>Cancelar</Button>
-                    <Button onClick={handleSave} disabled={isSaving} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white font-bold">{isSaving ? 'Salvando...' : 'Salvar Despesa'}</Button>
+                <DialogFooter className="flex gap-2">
+                    <Button variant="ghost" onClick={onClose} className="flex-1 rounded-xl">Cancelar</Button>
+                    <Button onClick={handleConfirm} className="bg-stone-900 text-white flex-1 rounded-xl font-bold">Confirmar</Button>
                 </DialogFooter>
             </DialogContent>
         </Dialog>
-    ); 
+    );
 }
 
-// ===============================================
-// COMPONENTE PRINCIPAL DA PÁGINA
-// ===============================================
-export default function Payments() {
-  const queryClient = useQueryClient();
-  const [, setLocation] = useLocation();
-  const [activeTab, setActiveTab] = useState("overview");
-  const [dateRange, setDateRange] = useState<DateRange | undefined>({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) });
-  const [staffFilter, setStaffFilter] = useState<string>('all');
-  const [locationFilter, setLocationFilter] = useState<string>('all');
-  const [editingExpense, setEditingExpense] = useState<Partial<Expense> | null>(null);
-
-  const { data: appointments = [], isLoading: isLoadingAppointments } = useQuery<Appointment[]>({ queryKey: ['appointments'], queryFn: appointmentsAPI.getAll });
-  const { data: services = [] } = useQuery<Service[]>({ queryKey: ['services'], queryFn: servicesAPI.getAll });
-  const { data: staff = [] } = useQuery<Staff[]>({ queryKey: ['staff'], queryFn: staffAPI.getAll });
-  const { data: locations = [] } = useQuery<Location[]>({ queryKey: ['locations'], queryFn: locationsAPI.getAll });
-  const { data: expenses = [], isLoading: isLoadingExpenses } = useQuery<Expense[]>({ queryKey: ['expenses'], queryFn: expensesAPI.getAll });
-  const { data: commissions = [] } = useQuery<StaffCommission[]>({ queryKey: ['staffCommissions'], queryFn: staffCommissionsAPI.getAll });
-
-  const isLoading = isLoadingAppointments || isLoadingExpenses;
-
-  // Mutations
-  const saveExpenseMutation = useMutation({ mutationFn: (data: Partial<Expense>) => { const { id, ...payload } = data; return id ? expensesAPI.update(id, payload) : expensesAPI.create(payload) }, onSuccess: () => { toast.success("Despesa salva com sucesso!"); setEditingExpense(null); queryClient.invalidateQueries({ queryKey: ['expenses'] }); }, onError: (error: any) => toast.error(error.message || "Erro ao salvar despesa."), });
-  const deleteExpenseMutation = useMutation({ mutationFn: (id: string) => expensesAPI.delete(id), onSuccess: () => { toast.success("Despesa excluída!"); queryClient.invalidateQueries({ queryKey: ['expenses'] }); }, onError: (error: any) => toast.error("Erro ao excluir."), });
-  
-  // --- LÓGICA DE CÁLCULO DE DADOS ---
-  const { currentFinancials, previousFinancials, filteredData, revenueChartData, expensesByTypeData } = useMemo(() => {
-    const serviceMap = new Map(services.map(s => [s.id, s.price_centavos || 0]));
-    const previousDateRange = getPreviousDateRange(dateRange);
-
-    const calculateMetrics = (range: DateRange | undefined) => {
-        // Receitas (Agendamentos Completos)
-        const filteredPayments = appointments.filter(apt => {
-            if(apt.status !== 'completed') return false;
-            const paymentDate = new Date(apt.start_time);
-            return range?.from && range?.to ? paymentDate >= range.from && paymentDate <= addDays(range.to, 1) : true;
-        }).map((apt): ProcessedPayment => ({
-            id: apt.id, appointmentId: apt.id, customerName: apt.customer_name, serviceName: apt.service_name, amount: apt.final_amount_centavos ?? serviceMap.get(apt.service) ?? 0, paymentDate: new Date(apt.start_time), commission: 0, paymentMethod: apt.payment_method || 'pix',
-        }));
-
-        // Despesas (Fixas e Variáveis)
-        const filteredExpenses = expenses.filter(exp => {
-            const paymentDate = new Date(exp.payment_date + 'T12:00:00');
-            return range?.from && range?.to ? paymentDate >= range.from && paymentDate <= addDays(range.to, 1) : true;
-        });
-
-        // Comissões (Consideradas Custo Variável de Pessoal)
-        const filteredCommissions = commissions.filter(com => {
-            const commissionDate = new Date(com.date + 'T12:00:00');
-            const isPaid = com.status === 'pago';
-            return isPaid && (range?.from && range?.to ? commissionDate >= range.from && commissionDate <= addDays(range.to, 1) : true);
-        });
-
-        const totalFaturamento = filteredPayments.reduce((sum, p) => sum + p.amount, 0);
-        
-        const totalDespesasFixas = filteredExpenses.filter(e => e.type === 'fixed').reduce((sum, e) => sum + e.amount_centavos, 0);
-        const totalDespesasVariaveis = filteredExpenses.filter(e => e.type === 'variable').reduce((sum, e) => sum + e.amount_centavos, 0);
-        
-        const totalComissoesPagas = filteredCommissions.reduce((sum, c) => sum + c.commission_amount_centavos, 0);
-
-        // Lucro Líquido = Faturamento - (Fixas + Variáveis + Comissões)
-        const lucro = totalFaturamento - (totalDespesasFixas + totalDespesasVariaveis + totalComissoesPagas);
-        
-        return { 
-            totalFaturamento, 
-            totalDespesasFixas, 
-            totalDespesasVariaveis, 
-            totalComissoesPagas,
-            totalCustos: totalDespesasFixas + totalDespesasVariaveis + totalComissoesPagas,
-            lucro, 
-            payments: filteredPayments, 
-            expenses: filteredExpenses 
-        };
-    };
-    
-    const currentFinancials = calculateMetrics(dateRange);
-    const previousFinancials = calculateMetrics(previousDateRange);
-    
-    // Gráfico de Barras (Receita)
-    const revenueChartData = Array.from(currentFinancials.payments.reduce((acc, p) => {
-        const day = format(p.paymentDate, 'dd/MM');
-        acc.set(day, (acc.get(day) || 0) + p.amount);
-        return acc;
-    }, new Map<string, number>())).map(([name, value]) => ({ name, Faturamento: value / 100 })).sort((a,b) => a.name.localeCompare(b.name));
-
-    // Gráfico de Rosca (Fixas vs Variáveis vs Comissões)
-    const expensesByTypeData = [
-        { name: 'Despesas Fixas', value: currentFinancials.totalDespesasFixas / 100, color: '#374151' }, // stone-700
-        { name: 'Despesas Variáveis', value: currentFinancials.totalDespesasVariaveis / 100, color: '#C6A87C' }, // Dourado
-        { name: 'Comissões', value: currentFinancials.totalComissoesPagas / 100, color: '#F59E0B' }, // Amber
-    ].filter(i => i.value > 0);
-
-    return { currentFinancials, previousFinancials, filteredData: currentFinancials, revenueChartData, expensesByTypeData };
-  }, [dateRange, appointments, services, expenses, commissions]);
-  
-  // Funções de Filtro
-  const setDateToToday = () => { const today = startOfDay(new Date()); setDateRange({ from: today, to: today }); };
-  const setDateToThisMonth = () => { const today = new Date(); setDateRange({ from: startOfMonth(today), to: endOfMonth(today) }); };
-
-  const handleExportCSV = () => {
-    let csvContent = "Data,Tipo,Descricao,Categoria,Valor\n";
-    filteredData.payments.forEach(p => csvContent += `${format(p.paymentDate, 'yyyy-MM-dd')},Receita,${p.serviceName},${p.paymentMethod},${(p.amount / 100).toFixed(2)}\n`);
-    filteredData.expenses.forEach(e => csvContent += `${e.payment_date},Despesa,${e.description},${e.category},${(-e.amount_centavos / 100).toFixed(2)}\n`);
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([csvContent], { type: 'text/csv;charset=utf-8;' }));
-    link.download = `financeiro_${format(new Date(), 'yyyy-MM-dd')}.csv`;
-    link.click();
-  };
-  
+function DatePickerWithPresets({ date, setDate }: { date: DateRange | undefined, setDate: (d: DateRange | undefined) => void }) {
   return (
-    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-500 bg-stone-50/50 dark:bg-stone-950 min-h-screen font-sans">
-      <ExpenseModal expense={editingExpense} onClose={() => setEditingExpense(null)} onSave={saveExpenseMutation.mutate} isSaving={saveExpenseMutation.isPending} />
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant={"outline"} className={cn("w-full md:w-[220px] justify-start text-left font-normal border-none bg-stone-100/50 hover:bg-stone-100 text-stone-600 h-10 shadow-none rounded-xl", !date && "text-muted-foreground")}>
+          <CalendarIcon className="mr-2 h-4 w-4 text-stone-400" />
+          {date?.from ? ( date.to ? <>{format(date.from, "dd MMM")} - {format(date.to, "dd MMM")}</> : format(date.from, "dd MMM yyyy") ) : <span>Selecione</span>}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0 rounded-2xl shadow-xl border-stone-100" align="end">
+        <Calendar mode="range" selected={date} onSelect={setDate} numberOfMonths={1} locale={ptBR} />
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export default function Payments() {
+  const [, setLocation] = useLocation();
+  const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [dateRange, setDateRange] = useState<DateRange | undefined>({ from: startOfMonth(new Date()), to: endOfMonth(new Date()) });
+  
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<any>(null);
+  const [itemToPay, setItemToPay] = useState<any>(null);
+  
+  const [entryType, setEntryType] = useState<'income' | 'expense'>('expense');
+  const [tableFilter, setTableFilter] = useState<'all' | 'realized' | 'pending'>('all');
+  const [searchTerm, setSearchTerm] = useState("");
+  const [cardFilter, setCardFilter] = useState<string>("all");
+
+  const queryOptions = { staleTime: 1000 * 60 * 5 };
+  const { data: appointments = [], isLoading: loadAppts } = useQuery({ queryKey: ['appointments'], queryFn: appointmentsAPI.getAll, ...queryOptions });
+  const { data: services = [] } = useQuery({ queryKey: ['services'], queryFn: servicesAPI.getAll, ...queryOptions });
+  const { data: expenses = [], isLoading: loadExp } = useQuery({ queryKey: ['expenses'], queryFn: expensesAPI.getAll, ...queryOptions });
+  const { data: commissions = [], isLoading: loadComm } = useQuery({ queryKey: ['staffCommissions'], queryFn: staffCommissionsAPI.getAll, ...queryOptions });
+  const { data: creditCards = [] } = useQuery({ queryKey: ['creditCards'], queryFn: creditCardsAPI.getAll, ...queryOptions });
+  const { data: categories = [] } = useQuery({ queryKey: ['categories'], queryFn: categoriesAPI.getAll, ...queryOptions });
+  const { data: accounts = [] } = useQuery({ queryKey: ['accounts'], queryFn: accountsAPI.getAll, ...queryOptions });
+
+  const isLoading = loadAppts || loadExp;
+
+  // --- MUTAÇÕES ---
+  const saveExpenseMutation = useMutation({ mutationFn: (data: any) => { const { id, ...payload } = data; return id ? expensesAPI.update(id, payload) : expensesAPI.create(payload) }, onSuccess: () => { toast.success("Salvo!"); setIsExpenseModalOpen(false); setEditingExpense(null); queryClient.invalidateQueries({ queryKey: ['expenses'] }); queryClient.invalidateQueries({ queryKey: ['cash-flow'] }); queryClient.invalidateQueries({ queryKey: ['accounts'] }); }, onError: (err: any) => toast.error(`Erro: ${err?.response?.data?.detail || 'Falha ao salvar.'}`) });
+  
+  const deleteExpenseMutation = useMutation({ mutationFn: (id: string) => expensesAPI.delete(id), onSuccess: () => { toast.success("Removido!"); queryClient.invalidateQueries({ queryKey: ['expenses'] }); } });
+  
+  // 🔥 MUTAÇÃO UNIFICADA DE BAIXA (Despesas e Comissões)
+  const payItemMutation = useMutation({ 
+      mutationFn: async ({ id, date, accountId, source, item }: { id: string, date: string, accountId: string, source: string, item: any }) => {
+          if (source === 'commission') {
+              // 1. Marca comissão como paga
+              await staffCommissionsAPI.update(id, { status: 'pago' });
+              
+              // 2. Cria a despesa de saída (para abater do caixa)
+              await expensesAPI.create({
+                  description: item.description,
+                  amount_centavos: Math.abs(item.amount), // Garante positivo
+                  payment_date: date,
+                  type: 'variable',
+                  category_legacy: 'Comissões',
+                  status: 'paid',
+                  account_id: accountId,
+                  payment_method: 'transfer' // ou 'cash'
+              });
+              // O create acima já atualiza o saldo via ExpenseViewSet
+          } else {
+              // Despesa normal: só atualiza status e conta
+              await expensesAPI.update(id, { status: 'paid', payment_date: date, account_id: accountId });
+          }
+      }, 
+      onSuccess: () => { 
+          toast.success("Baixa realizada!"); 
+          setItemToPay(null); 
+          queryClient.invalidateQueries({ queryKey: ['expenses'] }); 
+          queryClient.invalidateQueries({ queryKey: ['staffCommissions'] });
+          queryClient.invalidateQueries({ queryKey: ['accounts'] }); 
+      },
+      onError: () => toast.error("Erro ao realizar baixa.")
+  });
+
+  const saveCardMutation = useMutation({ mutationFn: (data: any) => { const { id, ...payload } = data; return id ? creditCardsAPI.update(id, payload) : creditCardsAPI.create(payload) }, onSuccess: () => { toast.success("Cartão salvo!"); queryClient.invalidateQueries({ queryKey: ['creditCards'] }); } });
+  const deleteCardMutation = useMutation({ mutationFn: (id: string) => creditCardsAPI.delete(id), onSuccess: () => { toast.success("Cartão removido!"); queryClient.invalidateQueries({ queryKey: ['creditCards'] }); } });
+  const saveAccountMutation = useMutation({ mutationFn: (data: any) => accountsAPI.create(data), onSuccess: () => { toast.success("Conta criada!"); queryClient.invalidateQueries({ queryKey: ['accounts'] }); } });
+  const deleteAccountMutation = useMutation({ mutationFn: (id: string) => accountsAPI.delete(id), onSuccess: () => { toast.success("Conta removida!"); queryClient.invalidateQueries({ queryKey: ['accounts'] }); } });
+  const payInvoiceMutation = useMutation({ mutationFn: async ({ items, accountId }: { items: any[], accountId: string }) => { for (const item of items) { await expensesAPI.update(item.id, { status: 'paid', account_id: accountId }); } }, onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['expenses'] }); queryClient.invalidateQueries({ queryKey: ['accounts'] }); toast.success("Fatura paga!"); } });
+  const saveCategoryMutation = useMutation({ mutationFn: categoriesAPI.create, onSuccess: () => { toast.success("Categoria criada!"); queryClient.invalidateQueries({ queryKey: ['categories'] }); } });
+  const deleteCategoryMutation = useMutation({ mutationFn: categoriesAPI.delete, onSuccess: () => { toast.success("Categoria removida!"); queryClient.invalidateQueries({ queryKey: ['categories'] }); } });
+
+  const openNewEntry = (type: 'income' | 'expense') => { setEditingExpense({}); setEntryType(type); setIsExpenseModalOpen(true); };
+  const handleSaveTransfer = (data: any) => { saveExpenseMutation.mutate(data); setIsTransferModalOpen(false); };
+
+  const financials = useMemo(() => {
+    const serviceMap = new Map(services.map((s:any) => [s.id, s.price_centavos || 0]));
+    const inDateRange = (dateStr: string) => { if (!dateStr) return false; if (!dateRange?.from) return true; const d = new Date(dateStr); const from = dateRange.from; const to = dateRange.to ? addDays(dateRange.to, 1) : addDays(from, 1); return d >= from && d < to; };
+    
+    // 🔥 PREVISÃO REAL: Futuro (Agendamentos)
+    const now = new Date();
+    const futureRevenue = appointments
+        .filter((a:any) => a.status === 'confirmed' && new Date(a.start_time) >= now)
+        .reduce((acc:number, a:any) => acc + (a.final_amount_centavos ?? serviceMap.get(a.service) ?? 0), 0);
+
+    const revenueItems = appointments.filter((a:any) => (a.status === 'completed' || a.status === 'confirmed') && inDateRange(a.start_time)).map((a:any) => ({ id: a.id, date: new Date(a.start_time), amount: a.final_amount_centavos ?? serviceMap.get(a.service) ?? 0, type: 'receita', description: `${a.service_name} - ${a.customer_name}`, category: 'Serviços', status: a.status === 'completed' ? 'realizado' : 'previsto', source: 'appointment', originalData: a }));
+    const extraIncomes = expenses.filter((e:any) => e.type === 'income' && inDateRange(e.payment_date + 'T12:00:00')).map((e:any) => ({ id: e.id, date: new Date(e.payment_date + 'T12:00:00'), amount: e.amount_centavos, type: 'receita', description: e.description, category: e.category_name || 'Receita Extra', status: e.status === 'paid' ? 'realizado' : 'previsto', source: 'expense', originalData: e }));
+    const expenseItems = expenses.filter((e:any) => e.type !== 'income' && e.type !== 'transfer' && inDateRange(e.payment_date + 'T12:00:00')).map((e:any) => { const cardName = e.card ? creditCards.find((c:any) => c.id === e.card)?.name : null; return { id: e.id, date: new Date(e.payment_date + 'T12:00:00'), amount: e.amount_centavos, type: 'despesa', description: e.description, category: e.category_name || 'Despesa', card_id: e.card, card_name: cardName, status: e.status === 'paid' ? 'realizado' : 'previsto', originalData: e, source: 'expense' }; });
+    const commissionItems = (commissions || []).filter((c:any) => inDateRange(c.date + 'T12:00:00')).map((c:any) => ({ id: c.id, date: new Date(c.date + 'T12:00:00'), amount: c.commission_amount_centavos, type: 'despesa', description: `Comissão - ${c.staff_name}`, category: 'Comissões', status: c.status === 'pago' ? 'realizado' : 'previsto', source: 'commission', originalData: c }));
+    
+    const allTransactions = [...revenueItems, ...extraIncomes, ...expenseItems, ...commissionItems].sort((a,b) => b.date.getTime() - a.date.getTime());
+    
+    const filteredTransactions = allTransactions.filter(t => { 
+        const matchesSearch = t.description.toLowerCase().includes(searchTerm.toLowerCase()) || t.category.toLowerCase().includes(searchTerm.toLowerCase()); 
+        const matchesCard = cardFilter === 'all' || (t.source === 'expense' && t.card_name === cardFilter); 
+        if (tableFilter === 'realized') return matchesSearch && matchesCard && t.status === 'realizado';
+        if (tableFilter === 'pending') return matchesSearch && matchesCard && t.status === 'previsto';
+        return matchesSearch && matchesCard; 
+    });
+
+    const totalRevenueRealized = revenueItems.filter((i:any) => i.status === 'realizado').reduce((acc: number, i: any) => acc + i.amount, 0) + extraIncomes.filter((i:any) => i.status === 'realizado').reduce((acc: number, i: any) => acc + i.amount, 0);
+    const totalRevenueProjected = totalRevenueRealized + futureRevenue + extraIncomes.filter((i:any) => i.status === 'previsto').reduce((acc: number, i: any) => acc + i.amount, 0);
+    const totalCostsRealized = expenseItems.filter((i:any) => i.status === 'realizado').reduce((acc: number, i: any) => acc + i.amount, 0) + commissionItems.filter((i:any) => i.status === 'realizado').reduce((acc: number, i: any) => acc + i.amount, 0);
+    const totalCostsProjected = expenseItems.reduce((acc: number, i: any) => acc + i.amount, 0) + commissionItems.reduce((acc: number, i: any) => acc + i.amount, 0);
+    const profitRealized = totalRevenueRealized - totalCostsRealized;
+    const profitProjected = totalRevenueProjected - totalCostsProjected;
+    const breakEvenProgress = totalCostsProjected > 0 ? Math.min(100, (totalRevenueRealized / totalCostsProjected) * 100) : 0;
+    
+    const chartDataMap = new Map(); allTransactions.forEach(item => { const d = format(item.date, 'dd/MM'); if(!chartDataMap.has(d)) chartDataMap.set(d, { revenue: 0, expense: 0 }); if (item.type === 'receita') chartDataMap.get(d).revenue += (item.amount/100); else chartDataMap.get(d).expense += (item.amount/100); });
+    const chartData = Array.from(chartDataMap).map(([name, val]:any) => ({ name, ...val })).sort((a:any,b:any) => a.name.localeCompare(b.name));
+    const totalCommissionsValue = commissionItems.reduce((acc:number, c:any) => acc + c.amount, 0);
+
+    return { totalRevenueRealized, totalRevenueProjected, totalCostsRealized, totalCostsProjected, profitRealized, profitProjected, breakEvenProgress, filteredTransactions, chartData, totalCommissionsValue };
+  }, [appointments, expenses, commissions, dateRange, services, searchTerm, cardFilter, creditCards, tableFilter]);
+
+  const flowSummary = useMemo(() => ({ 
+      income: financials.filteredTransactions.filter(t => t.type === 'receita').reduce((sum: number, t: any) => sum + t.amount, 0), 
+      expense: financials.filteredTransactions.filter(t => t.type === 'despesa').reduce((sum: number, t: any) => sum + t.amount, 0), 
+      balance: financials.filteredTransactions.reduce((acc: number, t: any) => acc + (t.type === 'receita' ? t.amount : -t.amount), 0) 
+  }), [financials.filteredTransactions]);
+
+  const handleExport = () => { let csv = "Data,Descrição,Categoria,Tipo,Status,Valor\n"; financials.filteredTransactions.forEach(t => csv += `${format(t.date, 'dd/MM/yyyy')},${t.description},${t.category},${t.type},${t.status},${(t.amount/100).toFixed(2)}\n`); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); link.download = "fluxo_caixa.csv"; link.click(); };
+
+  return (
+    <div className="p-4 md:p-10 max-w-[1400px] mx-auto space-y-8 bg-[#FDFDFD] min-h-screen pb-32 font-sans text-stone-700">
+      <ExpenseDialog open={isExpenseModalOpen} onClose={() => setIsExpenseModalOpen(false)} expense={editingExpense} cards={creditCards || []} categories={categories || []} onSave={saveExpenseMutation.mutate} isSaving={saveExpenseMutation.isPending} defaultType={entryType} accounts={accounts || []} />
+      <CategoryManager open={isCategoryModalOpen} onClose={() => setIsCategoryModalOpen(false)} categories={categories || []} onSave={saveCategoryMutation.mutate} onDelete={deleteCategoryMutation.mutate} />
+      <TransferDialog open={isTransferModalOpen} onClose={() => setIsTransferModalOpen(false)} onSave={handleSaveTransfer} accounts={accounts || []} />
       
-      {/* CABEÇALHO */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-stone-800 dark:text-stone-100 tracking-tight flex items-center gap-3">
-            <div className="p-2 bg-white dark:bg-stone-900 rounded-lg shadow-sm border border-stone-100 dark:border-stone-800">
-               <DollarSign className="w-5 h-5 text-[#C6A87C]" />
+      {/* 🔥 MODAL UNIVERSAL PARA BAIXAS */}
+      <UniversalPayModal 
+        open={!!itemToPay} 
+        onClose={() => setItemToPay(null)} 
+        item={itemToPay} 
+        accounts={accounts || []} 
+        onConfirm={(item:any, date:string, accountId:string) => payItemMutation.mutate({ id: item.id, date, accountId, source: item.source, item })} 
+      />
+
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 animate-in slide-in-from-top-4 duration-500">
+        <div><h1 className="text-3xl md:text-4xl font-black text-stone-800 tracking-tight">Fluxo de Caixa</h1><p className="text-stone-400 font-medium">Gestão inteligente e previsível.</p></div>
+        <div className="flex flex-wrap gap-3">
+            <Button onClick={() => setIsTransferModalOpen(true)} variant="outline" className="h-12 border-stone-200 text-stone-600 rounded-xl hover:bg-stone-50"><ArrowRightLeft className="w-4 h-4 mr-2"/> Transferir</Button>
+            <Button onClick={() => openNewEntry('income')} className="h-12 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-lg shadow-emerald-100 rounded-xl px-6"><ArrowUpCircle className="w-5 h-5 mr-2"/> Nova Receita</Button>
+            <Button onClick={() => openNewEntry('expense')} className="h-12 bg-stone-900 hover:bg-black text-white font-bold shadow-lg shadow-stone-200 rounded-xl px-6"><ArrowDownCircle className="w-5 h-5 mr-2"/> Nova Despesa</Button>
+        </div>
+      </div>
+
+      {isLoading ? <Skeleton className="h-96 w-full rounded-3xl"/> : (
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
+            <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-2 rounded-2xl border border-stone-100 shadow-sm">
+                <TabsList className="bg-stone-100/50 p-1 rounded-xl h-auto gap-1">
+                    <TabsTrigger value="dashboard" className="rounded-lg px-4 py-2 data-[state=active]:bg-white data-[state=active]:text-stone-900 data-[state=active]:shadow-sm font-bold text-stone-500 transition-all"><LayoutDashboard className="w-4 h-4 mr-2"/> Dashboard</TabsTrigger>
+                    <TabsTrigger value="cashflow" className="rounded-lg px-4 py-2 data-[state=active]:bg-white data-[state=active]:text-stone-900 data-[state=active]:shadow-sm font-bold text-stone-500 transition-all"><List className="w-4 h-4 mr-2"/> Lançamentos</TabsTrigger>
+                    <TabsTrigger value="cards" className="rounded-lg px-4 py-2 data-[state=active]:bg-white data-[state=active]:text-stone-900 data-[state=active]:shadow-sm font-bold text-stone-500 transition-all"><CardIcon className="w-4 h-4 mr-2"/> Carteira</TabsTrigger>
+                </TabsList>
+                <div className="flex gap-2 w-full md:w-auto"><DatePickerWithPresets date={dateRange} setDate={setDateRange} /><Button variant="ghost" size="icon" className="text-stone-400 hover:text-stone-600 rounded-xl" onClick={() => setIsCategoryModalOpen(true)}><Settings2 className="w-5 h-5"/></Button></div>
             </div>
-            Financeiro
-          </h1>
-          <p className="text-stone-500 dark:text-stone-400 text-sm mt-1 ml-1">
-            Fluxo de caixa, despesas e lucratividade.
-          </p>
-        </div>
-        <div className="flex gap-2">
-            <Button variant="outline" onClick={handleExportCSV} className="border-stone-200">
-                <FileDown className="w-4 h-4 mr-2" /> Exportar
-            </Button>
-            <Button onClick={() => setEditingExpense({})} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white shadow-md">
-                <Plus className="w-4 h-4 mr-2" /> Nova Despesa
-            </Button>
-        </div>
-      </div>
 
-      {/* FILTROS DE DATA */}
-      <div className="flex flex-wrap items-center gap-2 bg-white dark:bg-stone-900 p-2 rounded-xl border border-stone-100 dark:border-stone-800 shadow-sm">
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button id="date" variant={"ghost"} className="w-[260px] justify-start text-left font-normal bg-stone-50 dark:bg-stone-950 border border-stone-200 dark:border-stone-800" >
-              <CalendarIcon className="mr-2 h-4 w-4 text-[#C6A87C]" />
-              {dateRange?.from ? ( dateRange.to ? ( <> {format(dateRange.from, "dd/MM/yyyy")} - {format(dateRange.to, "dd/MM/yyyy")} </> ) : ( format(dateRange.from, "dd/MM/yyyy") ) ) : ( <span>Selecione o período</span> )}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0" align="start">
-            <Calendar initialFocus mode="range" defaultMonth={dateRange?.from} selected={dateRange} onSelect={setDateRange} numberOfMonths={2} locale={ptBR} />
-          </PopoverContent>
-        </Popover>
-        <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" onClick={setDateToToday} className="text-stone-500 hover:text-[#C6A87C]">Hoje</Button>
-            <Button variant="ghost" size="sm" onClick={setDateToThisMonth} className="text-stone-500 hover:text-[#C6A87C]">Este Mês</Button>
-        </div>
-      </div>
-      
-      {isLoading ? (
-        <div className="space-y-6 mt-6">
-            <Skeleton className="h-[320px] w-full" />
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6"><Skeleton className="h-32"/><Skeleton className="h-32"/><Skeleton className="h-32"/><Skeleton className="h-32"/></div>
-        </div>
-      ) : (
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="bg-white dark:bg-stone-900 border border-stone-100 dark:border-stone-800 p-1 rounded-xl h-auto w-full md:w-auto grid grid-cols-3 md:flex">
-              <TabsTrigger value="overview" className="rounded-lg data-[state=active]:bg-[#C6A87C] data-[state=active]:text-white"><BarChart3 className="w-4 h-4 mr-2"/> Visão Geral</TabsTrigger>
-              <TabsTrigger value="transactions" className="rounded-lg data-[state=active]:bg-[#C6A87C] data-[state=active]:text-white"><Receipt className="w-4 h-4 mr-2"/> Transações</TabsTrigger>
-              <TabsTrigger value="expenses" className="rounded-lg data-[state=active]:bg-[#C6A87C] data-[state=active]:text-white"><Landmark className="w-4 h-4 mr-2"/> Despesas</TabsTrigger>
-          </TabsList>
-          
-          <TabsContent value="overview" className="space-y-6">
-              {/* CARDS DE KPI */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <Card className="border-stone-100 shadow-sm bg-white">
-                      <CardHeader className="pb-2"><p className="text-xs text-stone-400 uppercase font-bold tracking-wider">Faturamento Bruto</p></CardHeader>
-                      <CardContent>
-                          <div className="flex justify-between items-center">
-                             <p className="text-2xl font-bold text-stone-800">R$ {(currentFinancials.totalFaturamento / 100).toFixed(2)}</p>
-                             <PercentageChange current={currentFinancials.totalFaturamento} previous={previousFinancials.totalFaturamento} />
-                          </div>
-                      </CardContent>
-                  </Card>
-                  <Card className="border-stone-100 shadow-sm bg-white">
-                      <CardHeader className="pb-2"><p className="text-xs text-stone-400 uppercase font-bold tracking-wider">Custos Totais</p></CardHeader>
-                      <CardContent>
-                          <div className="flex justify-between items-center">
-                             <p className="text-2xl font-bold text-red-500">- R$ {(currentFinancials.totalCustos / 100).toFixed(2)}</p>
-                             <PercentageChange current={currentFinancials.totalCustos} previous={previousFinancials.totalCustos} />
-                          </div>
-                          <p className="text-[10px] text-stone-400 mt-1">Inclui Comissões + Despesas</p>
-                      </CardContent>
-                  </Card>
-                  <Card className="border-stone-100 shadow-sm bg-white">
-                      <CardHeader className="pb-2"><p className="text-xs text-stone-400 uppercase font-bold tracking-wider">Lucro Líquido</p></CardHeader>
-                      <CardContent>
-                          <div className="flex justify-between items-center">
-                             <p className="text-2xl font-bold text-emerald-600">R$ {(currentFinancials.lucro / 100).toFixed(2)}</p>
-                             <PercentageChange current={currentFinancials.lucro} previous={previousFinancials.lucro} />
-                          </div>
-                          <p className="text-[10px] text-stone-400 mt-1">Margem: {currentFinancials.totalFaturamento > 0 ? ((currentFinancials.lucro / currentFinancials.totalFaturamento) * 100).toFixed(1) : 0}%</p>
-                      </CardContent>
-                  </Card>
-                  {/* CARD DE DETALHE DE CUSTOS */}
-                  <Card className="border-stone-100 shadow-sm bg-stone-50/50">
-                      <CardContent className="pt-6 space-y-2">
-                          <div className="flex justify-between text-xs"><span className="text-stone-500">Fixas (Aluguel, etc)</span><span className="font-bold text-stone-700">R$ {(currentFinancials.totalDespesasFixas/100).toFixed(2)}</span></div>
-                          <div className="flex justify-between text-xs"><span className="text-stone-500">Variáveis</span><span className="font-bold text-[#C6A87C]">R$ {(currentFinancials.totalDespesasVariaveis/100).toFixed(2)}</span></div>
-                          <div className="flex justify-between text-xs"><span className="text-stone-500">Comissões Pagas</span><span className="font-bold text-amber-500">R$ {(currentFinancials.totalComissoesPagas/100).toFixed(2)}</span></div>
-                      </CardContent>
-                  </Card>
-              </div>
+            <TabsContent value="dashboard" className="space-y-6 animate-in fade-in zoom-in-95 duration-300">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <Card className="bg-stone-900 text-white border-none shadow-xl col-span-1 md:col-span-2 relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+                        <CardHeader className="pb-2"><CardTitle className="text-xs font-bold text-stone-400 uppercase tracking-widest flex justify-between"><span>Realizado do Mês</span><Target className="w-4 h-4 text-[#C6A87C]"/></CardTitle></CardHeader>
+                        <CardContent><div className="flex justify-between items-end mb-4"><div><span className="text-4xl font-black tracking-tighter">{formatCurrency(financials.totalRevenueRealized / 100)}</span><p className="text-stone-400 text-sm mt-1">Faturamento Confirmado</p></div><div className="text-right"><span className="text-xs text-stone-400 uppercase font-bold">Meta de Custos</span><p className="text-xl font-bold text-[#C6A87C]">{formatCurrency(financials.totalCostsProjected / 100)}</p></div></div>
+                        <Progress value={financials.breakEvenProgress} className="h-2 bg-stone-800" /><p className="text-xs text-stone-500 mt-2 text-right">{financials.breakEvenProgress.toFixed(0)}% da meta de custos paga</p></CardContent>
+                    </Card>
+                    <Card className="border-none shadow-sm bg-white hover:shadow-md transition-all"><CardHeader><CardTitle className="text-xs font-bold text-stone-400 uppercase flex items-center gap-2"><Rocket className="w-4 h-4 text-blue-500"/> Previsão do Mês</CardTitle></CardHeader><CardContent><p className={`text-3xl font-black text-stone-800`}>{formatCurrency(financials.profitProjected / 100)}</p><p className="text-xs text-stone-400 mt-2">Lucro se receber/pagar tudo.</p></CardContent></Card>
+                    <Card className="border-none shadow-sm bg-white hover:shadow-md transition-all"><CardHeader><CardTitle className="text-xs font-bold text-stone-400 uppercase flex items-center gap-2"><Users className="w-4 h-4 text-emerald-500"/> Comissões</CardTitle></CardHeader><CardContent><p className="text-3xl font-black text-stone-800">{formatCurrency(financials.totalCommissionsValue / 100)}</p><p className="text-xs text-stone-400 mt-2">Reservado para equipe.</p></CardContent></Card>
+                </div>
+                {/* GRÁFICO MELHORADO */}
+                <Card className="border-none shadow-sm bg-white p-6"><h3 className="font-bold text-stone-700 mb-6">Fluxo Diário (Realizado + Previsto)</h3><div className="h-[300px]"><ResponsiveContainer width="100%" height="100%"><AreaChart data={financials.chartData}><defs><linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#C6A87C" stopOpacity={0.3}/><stop offset="95%" stopColor="#C6A87C" stopOpacity={0}/></linearGradient><linearGradient id="colorExp" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#ef4444" stopOpacity={0.3}/><stop offset="95%" stopColor="#ef4444" stopOpacity={0}/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" /><XAxis dataKey="name" fontSize={10} axisLine={false} tickLine={false} tickMargin={10} /><YAxis fontSize={10} axisLine={false} tickLine={false} tickFormatter={(val) => `R$ ${val}`} /><RechartsTooltip contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)'}} formatter={(val: number) => formatCurrency(val)} /><Area type="monotone" dataKey="revenue" name="Entradas" stroke="#C6A87C" fill="url(#colorRev)" strokeWidth={3} activeDot={{r: 6}} /><Area type="monotone" dataKey="expense" name="Saídas" stroke="#ef4444" fill="url(#colorExp)" strokeWidth={3} activeDot={{r: 6}} /></AreaChart></ResponsiveContainer></div></Card>
+            </TabsContent>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                 {/* GRÁFICO DE BARRAS (FATURAMENTO) */}
-                 <Card className="col-span-2 border-stone-100 shadow-sm">
-                    <CardHeader><CardTitle className="text-lg">Fluxo de Receita Diária</CardTitle></CardHeader>
-                    <CardContent>
-                        <ResponsiveContainer width="100%" height={300}>
-                            <BarChart data={revenueChartData}>
-                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                                <XAxis dataKey="name" stroke="#a8a29e" fontSize={12} tickLine={false} axisLine={false} />
-                                <YAxis stroke="#a8a29e" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `R$${value}`} />
-                                <Tooltip cursor={{ fill: '#f5f5f4' }} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
-                                <Bar dataKey="Faturamento" fill="#C6A87C" radius={[4, 4, 0, 0]} />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    </CardContent>
-                 </Card>
+            <TabsContent value="cashflow" className="space-y-4 animate-in fade-in zoom-in-95 duration-300">
+                <div className="grid grid-cols-3 gap-2 md:gap-4">
+                    <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-100 text-center md:text-left"><span className="text-[10px] md:text-xs font-bold text-emerald-600 uppercase block mb-1">Entradas</span><span className="text-sm md:text-xl font-bold text-emerald-700">{formatCurrency(flowSummary.income / 100)}</span></div>
+                    <div className="bg-red-50 rounded-lg p-3 border border-red-100 text-center md:text-left"><span className="text-[10px] md:text-xs font-bold text-red-600 uppercase block mb-1">Saídas</span><span className="text-sm md:text-xl font-bold text-red-700">{formatCurrency(Math.abs(flowSummary.expense) / 100)}</span></div>
+                    <div className="bg-white rounded-lg p-3 border border-stone-200 text-center md:text-left shadow-sm"><span className="text-[10px] md:text-xs font-bold text-stone-500 uppercase block mb-1">Saldo (Filtro)</span><span className={`text-sm md:text-xl font-bold ${flowSummary.balance >= 0 ? 'text-stone-800' : 'text-red-600'}`}>{formatCurrency(flowSummary.balance / 100)}</span></div>
+                </div>
+                
+                <div className="bg-white p-2 rounded-2xl border border-stone-100 shadow-sm flex flex-col md:flex-row gap-3 items-center">
+                    <div className="flex bg-stone-100/50 p-1 rounded-xl">
+                        <button onClick={() => setTableFilter('all')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${tableFilter === 'all' ? 'bg-white shadow text-stone-800' : 'text-stone-500 hover:text-stone-700'}`}>Todos</button>
+                        <button onClick={() => setTableFilter('realized')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${tableFilter === 'realized' ? 'bg-white shadow text-emerald-600' : 'text-stone-500 hover:text-stone-700'}`}>Realizados</button>
+                        <button onClick={() => setTableFilter('pending')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${tableFilter === 'pending' ? 'bg-white shadow text-amber-600' : 'text-stone-500 hover:text-stone-700'}`}>Previstos</button>
+                    </div>
+                    <div className="relative flex-1 w-full"><Search className="w-4 h-4 text-stone-400 absolute left-4 top-1/2 -translate-y-1/2"/><Input placeholder="Buscar..." className="pl-10 h-10 bg-stone-50 border-none rounded-xl focus-visible:ring-1 focus-visible:ring-stone-200" value={searchTerm} onChange={e => setSearchTerm(e.target.value)}/></div>
+                    <Select value={cardFilter} onValueChange={setCardFilter}><SelectTrigger className="w-[140px] h-10 bg-stone-50 border-none rounded-xl"><SelectValue placeholder="Cartão" /></SelectTrigger><SelectContent>{creditCards.map((c: any) => (<SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>))}<SelectItem value="all">Todos Cartões</SelectItem></SelectContent></Select>
+                </div>
 
-                 {/* GRÁFICO DE ROSCA (CUSTOS) */}
-                 <Card className="border-stone-100 shadow-sm">
-                    <CardHeader><CardTitle className="text-lg">Composição de Custos</CardTitle></CardHeader>
-                    <CardContent>
-                        <ResponsiveContainer width="100%" height={300}>
-                            <PieChart>
-                                <Pie data={expensesByTypeData} cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5} dataKey="value">
-                                    {expensesByTypeData.map((entry, index) => (<Cell key={`cell-${index}`} fill={entry.color} />))}
-                                </Pie>
-                                <Tooltip formatter={(value: number) => `R$ ${value.toFixed(2)}`} />
-                                <Legend verticalAlign="bottom" height={36} iconType="circle" />
-                            </PieChart>
-                        </ResponsiveContainer>
-                        {expensesByTypeData.length === 0 && <p className="text-center text-stone-400 text-sm mt-[-150px]">Sem custos no período.</p>}
-                    </CardContent>
-                 </Card>
-              </div>
-          </TabsContent>
+                <div className="bg-white rounded-3xl border border-stone-100 shadow-sm overflow-hidden">
+                    <div className="hidden md:block">
+                        <Table>
+                            <TableHeader className="bg-stone-50/50">
+                                <TableRow className="border-stone-100 hover:bg-transparent">
+                                    <TableHead className="w-[120px] text-[11px] font-bold text-stone-400 uppercase tracking-wider pl-6">Data</TableHead>
+                                    <TableHead className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">Descrição</TableHead>
+                                    <TableHead className="text-[11px] font-bold text-stone-400 uppercase tracking-wider">Categoria</TableHead>
+                                    <TableHead className="text-right text-[11px] font-bold text-stone-400 uppercase tracking-wider">Valor</TableHead>
+                                    <TableHead className="text-center text-[11px] font-bold text-stone-400 uppercase tracking-wider">Status</TableHead>
+                                    <TableHead className="w-[80px]"></TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {financials.filteredTransactions.length === 0 ? <TableRow><TableCell colSpan={6} className="h-32 text-center text-stone-400">Nenhum lançamento encontrado.</TableCell></TableRow> : 
+                                financials.filteredTransactions.map((t: any) => (
+                                    <TableRow key={t.id} className="group border-stone-50 hover:bg-stone-50/50 transition-colors">
+                                        <TableCell className="pl-6 text-xs font-medium text-stone-500">{format(t.date, 'dd MMM yyyy', {locale: ptBR})}</TableCell>
+                                        <TableCell><span className="text-sm font-bold text-stone-700">{t.description}</span></TableCell>
+                                        <TableCell><div className="flex flex-col items-start gap-1"><Badge variant="secondary" className="bg-stone-100 text-stone-500 hover:bg-stone-200 font-normal">{t.category}</Badge>{t.card_name && <span className="text-[10px] text-stone-400 flex items-center gap-1"><CreditCard className="w-3 h-3"/> {t.card_name}</span>}</div></TableCell>
+                                        <TableCell className={`text-right font-bold text-sm ${t.type === 'receita' ? 'text-emerald-600' : 'text-stone-700'}`}>{t.type === 'receita' ? '+' : ''} {formatCurrency(Math.abs(t.amount) / 100)}</TableCell>
+                                        <TableCell className="text-center">{t.status === 'realizado' ? <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-100 text-emerald-600"><CheckCircle2 className="w-4 h-4"/></div> : <div className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-amber-100 text-amber-600"><Clock className="w-4 h-4"/></div>}</TableCell>
+                                        <TableCell>
+                                            <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                {/* 🔥 Link Corrigido para /appointments */}
+                                                {t.source === 'appointment' ? (
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-blue-500 hover:bg-blue-50 rounded-lg" onClick={() => setLocation(`/appointments`)} title="Ver Agendamento"><ExternalLink className="w-4 h-4"/></Button>
+                                                ) : (
+                                                    <>
+                                                        {t.status === 'previsto' && (<Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 rounded-lg" onClick={() => setItemToPay(t.originalData)} title="Baixar"><CheckCircle2 className="w-4 h-4"/></Button>)}
+                                                        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8 text-stone-400 hover:text-stone-600 rounded-lg"><MoreHorizontal className="w-4 h-4"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="rounded-xl"><DropdownMenuItem onClick={() => { setEditingExpense(t.originalData); setIsExpenseModalOpen(true); }}><Pencil className="w-3 h-3 mr-2"/> Editar</DropdownMenuItem><DropdownMenuItem className="text-red-600" onClick={() => deleteExpenseMutation.mutate(t.id)}><Trash2 className="w-3 h-3 mr-2"/> Excluir</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </div>
+                    {/* MOBILE LIST (Kanban Style) */}
+                    <div className="md:hidden space-y-3 p-4">
+                        {financials.filteredTransactions.map((t: any) => { const Icon = getCategoryIcon(t.category); return (
+                            <div key={t.id} className="p-4 bg-white rounded-2xl border border-stone-100 shadow-sm flex flex-col gap-3">
+                                <div className="flex justify-between items-start">
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${t.type === 'receita' ? 'bg-emerald-50 text-emerald-600' : 'bg-stone-100 text-stone-500'}`}><Icon className="w-5 h-5"/></div>
+                                        <div><p className="font-bold text-stone-800 text-sm">{t.description}</p><span className="text-xs text-stone-400">{format(t.date, 'dd MMM')}</span></div>
+                                    </div>
+                                    <Badge variant="secondary" className={t.status === 'realizado' ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}>{t.status === 'realizado' ? "Pago" : "Pendente"}</Badge>
+                                </div>
+                                <div className="flex justify-between items-center pt-2 border-t border-stone-50">
+                                    <span className={`font-black text-lg ${t.type === 'receita' ? 'text-emerald-600' : 'text-stone-800'}`}>{formatCurrency(t.amount / 100)}</span>
+                                    <div className="flex gap-2">
+                                        {t.source === 'appointment' ? (<Button size="sm" variant="ghost" className="h-8 text-xs text-blue-500" onClick={() => setLocation(`/appointments`)}>Ver <ExternalLink className="w-3 h-3 ml-1"/></Button>) : (<>{t.status === 'previsto' && <Button size="sm" className="h-8 text-xs bg-emerald-50 text-emerald-700 hover:bg-emerald-100" onClick={() => setItemToPay(t.originalData)}>Baixar</Button>}<DropdownMenu><DropdownMenuTrigger asChild><Button size="sm" variant="ghost" className="h-8 w-8 p-0 text-stone-300"><MoreHorizontal className="w-4 h-4"/></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => { setEditingExpense(t.originalData); setIsExpenseModalOpen(true); }}>Editar</DropdownMenuItem><DropdownMenuItem className="text-red-600" onClick={() => deleteExpenseMutation.mutate(t.id)}>Excluir</DropdownMenuItem></DropdownMenuContent></DropdownMenu></>)}
+                                    </div>
+                                </div>
+                            </div>
+                        )})}
+                    </div>
+                </div>
+            </TabsContent>
 
-          <TabsContent value="expenses" className="space-y-6">
-              <Card className="border-stone-100 shadow-sm">
-                  <CardHeader className="flex flex-row items-center justify-between">
-                      <CardTitle>Histórico de Despesas</CardTitle>
-                      <Button size="sm" onClick={() => setEditingExpense({})} className="bg-[#C6A87C] hover:bg-[#B08D55] text-white">
-                          <Plus className="w-4 h-4 mr-2"/> Nova Despesa
-                      </Button>
-                  </CardHeader>
-                  <CardContent>
-                      <Table>
-                          <TableHeader>
-                              <TableRow>
-                                  <TableHead>Descrição</TableHead>
-                                  <TableHead>Categoria</TableHead>
-                                  <TableHead>Tipo</TableHead>
-                                  <TableHead>Data</TableHead>
-                                  <TableHead className="text-right">Valor</TableHead>
-                                  <TableHead></TableHead>
-                              </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                              {filteredData.expenses.length > 0 ? (
-                                  filteredData.expenses.map(exp => (
-                                      <TableRow key={exp.id}>
-                                          <TableCell className="font-medium">{exp.description}</TableCell>
-                                          <TableCell className="capitalize text-stone-500">{exp.category}</TableCell>
-                                          <TableCell>
-                                              <Badge variant="outline" className={exp.type === 'fixed' ? 'bg-stone-100 text-stone-600 border-stone-200' : 'bg-[#C6A87C]/10 text-[#C6A87C] border-[#C6A87C]/20'}>
-                                                  {exp.type === 'fixed' ? 'Fixa' : 'Variável'}
-                                              </Badge>
-                                          </TableCell>
-                                          <TableCell>{format(new Date(exp.payment_date + 'T12:00:00'), 'dd/MM/yyyy')}</TableCell>
-                                          <TableCell className="text-right font-bold text-stone-700">R$ {(exp.amount_centavos / 100).toFixed(2)}</TableCell>
-                                          <TableCell className="text-right">
-                                              <Button variant="ghost" size="icon" onClick={() => setEditingExpense(exp)}><Pencil className="w-4 h-4 text-stone-400"/></Button>
-                                              <Button variant="ghost" size="icon" onClick={() => deleteExpenseMutation.mutate(exp.id)}><Trash2 className="w-4 h-4 text-red-400"/></Button>
-                                          </TableCell>
-                                      </TableRow>
-                                  ))
-                              ) : (
-                                  <TableRow><TableCell colSpan={6} className="text-center py-8 text-stone-400">Nenhuma despesa neste período.</TableCell></TableRow>
-                              )}
-                          </TableBody>
-                      </Table>
-                  </CardContent>
-              </Card>
-          </TabsContent>
-
-          <TabsContent value="transactions">
-              <Card className="border-stone-100 shadow-sm">
-                  <CardHeader><CardTitle>Transações de Entrada</CardTitle></CardHeader>
-                  <CardContent>
-                      <Table>
-                          <TableHeader><TableRow><TableHead>Data</TableHead><TableHead>Cliente</TableHead><TableHead>Serviço</TableHead><TableHead>Método</TableHead><TableHead className="text-right">Valor</TableHead></TableRow></TableHeader>
-                          <TableBody>
-                              {filteredData.payments.map(payment => (
-                                  <TableRow key={payment.id}>
-                                      <TableCell>{format(payment.paymentDate, 'dd/MM/yyyy HH:mm')}</TableCell>
-                                      <TableCell>{payment.customerName}</TableCell>
-                                      <TableCell>{payment.serviceName}</TableCell>
-                                      <TableCell className="capitalize">{payment.paymentMethod}</TableCell>
-                                      <TableCell className="text-right font-bold text-emerald-600">R$ {(payment.amount / 100).toFixed(2)}</TableCell>
-                                  </TableRow>
-                              ))}
-                          </TableBody>
-                      </Table>
-                  </CardContent>
-              </Card>
-          </TabsContent>
+            <TabsContent value="cards" className="animate-in fade-in zoom-in-95 duration-300">
+                <CreditCardManager cards={creditCards} accounts={accounts || []} expenses={expenses} onSaveCard={saveCardMutation.mutate} onDeleteCard={deleteCardMutation.mutate} onSaveAccount={saveAccountMutation.mutate} onDeleteAccount={deleteAccountMutation.mutate} onPayInvoice={(items: any, accountId: string) => payInvoiceMutation.mutate({ items, accountId })} />
+            </TabsContent>
         </Tabs>
       )}
     </div>

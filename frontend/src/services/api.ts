@@ -166,14 +166,35 @@ export const customersAPI = {
   adjustPoints: async (id: string, data: { points_to_adjust: number }) => (await api.post(`/customers/${id}/adjust-points/`, data)).data,
     
   checkPhone: async (phone: string) => (await api.get(`/customers/check-phone/?phone=${encodeURIComponent(phone)}`)).data,
+
+  // Busca quem indicou
+  getByReferralCode: async (code: string) => {
+    const response = await api.get(`/customers/find_by_referral/?code=${code}`);
+    return response.data;
+  },
 };
 
 export const appointmentsAPI = {
-  getAll: async () => (await api.get("/appointments/")).data,
-  getOne: async (id: string | number) => (await api.get(`/appointments/${id}/`)).data,
-  create: async (data: DataPayload) => (await api.post("/appointments/", data)).data,
-  update: async (id: string | number, data: DataPayload) => (await api.patch(`/appointments/${id}/`, data)).data,
-  delete: async (id: string | number) => (await api.delete(`/appointments/${id}/`)).data,
+  getAll: async () => {
+    const response = await api.get("/appointments/");
+    return response.data;
+  },
+  create: async (data: any) => {
+    const response = await api.post("/appointments/", data);
+    return response.data;
+  },
+  update: async (id: string, data: any) => {
+    const response = await api.patch(`/appointments/${id}/`, data);
+    return response.data;
+  },
+  delete: async (id: string) => {
+    await api.delete(`/appointments/${id}/`);
+  },
+  // 🔥 NOVO: Adicione esta função
+  pay: async (id: string, data: any) => {
+    const response = await api.post(`/appointments/${id}/pay/`, data);
+    return response.data;
+  }
 };
 
 export const staffShiftsAPI = {
@@ -221,9 +242,19 @@ export const referralsAPI = {
 export const expensesAPI = {
   getAll: async () => (await api.get("/expenses/")).data,
   create: async (data: DataPayload) => (await api.post("/expenses/", data)).data,
-  update: async (id: string | number, data: DataPayload) => (await api.put(`/expenses/${id}/`, data)).data,
+  update: async (id: string, data: any) => {
+        const response = await api.patch(`/expenses/${id}/`, data);
+        return response.data;
+    },
   delete: async (id: string | number) => (await api.delete(`/expenses/${id}/`)).data,
+
+  updateStatus: async (id: string, status: string) => {
+        const response = await api.patch(`/expenses/${id}/`, { status });
+        return response.data;
+    }
 };
+
+
 
 export const reportsAPI = {
   getRevenueByStaff: async (startDate: string, endDate: string) => (await api.get(`/reports/revenue-by-staff/?start_date=${startDate}&end_date=${endDate}`)).data,
@@ -239,3 +270,88 @@ export const promotionsAPI = {
 };
 
 export default api;
+
+export const creditCardsAPI = {
+    getAll: async () => {
+        const response = await api.get('/credit-cards/');
+        return response.data;
+    },
+    create: async (data: any) => {
+        const response = await api.post('/credit-cards/', data);
+        return response.data;
+    },
+    update: async (id: string, data: any) => {
+        const response = await api.patch(`/credit-cards/${id}/`, data);
+        return response.data;
+    },
+    delete: async (id: string) => {
+        await api.delete(`/credit-cards/${id}/`);
+    }
+};
+
+// Adicione ou verifique se existe no api.ts
+export const categoriesAPI = {
+    getAll: async () => {
+        const response = await api.get('/categories/');
+        return response.data;
+    },
+    create: async (data: { name: string; type: 'income' | 'expense' }) => {
+        const response = await api.post('/categories/', data);
+        return response.data;
+    },
+    delete: async (id: string) => {
+        await api.delete(`/categories/${id}/`);
+    }
+};
+
+export const financialAPI = {
+    getDashboard: async (startDate?: string, endDate?: string) => {
+        const query = new URLSearchParams();
+        if (startDate) query.append('start_date', startDate);
+        if (endDate) query.append('end_date', endDate);
+        
+        const response = await api.get(`/dashboard/financial/?${query.toString()}`);
+        return response.data;
+    },
+    getCashFlow: async (startDate?: string, endDate?: string) => {
+        const query = new URLSearchParams();
+        if (startDate) query.append('start_date', startDate);
+        if (endDate) query.append('end_date', endDate);
+        
+        const response = await api.get(`/finance/cashflow/?${query.toString()}`);
+        return response.data;
+    }
+};
+
+export const accountsAPI = {
+    getAll: async () => {
+        const response = await api.get('/accounts/');
+        return response.data;
+    },
+    create: async (data: any) => {
+        const response = await api.post('/accounts/', data);
+        return response.data;
+    },
+    delete: async (id: string) => {
+        await api.delete(`/accounts/${id}/`);
+    }
+};
+
+export const partnersAPI = {
+  getAll: async () => {
+    const response = await api.get("/partners/");
+    return response.data;
+  },
+  create: async (data: any) => {
+    const response = await api.post("/partners/", data);
+    return response.data;
+  },
+  delete: async (id: string) => {
+    await api.delete(`/partners/${id}/`);
+  },
+  // Para buscar uma parceria específica pelo slug (usado no agendamento público)
+  getBySlug: async (slug: string) => {
+    const response = await api.get(`/partners/?slug=${slug}`);
+    return response.data;
+  }
+};

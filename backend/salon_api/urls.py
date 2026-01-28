@@ -3,13 +3,14 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .views import (
-    LocationViewSet, StaffViewSet, ServiceViewSet, CustomerViewSet, 
+    CashFlowView, FinancialDashboardView, LocationViewSet, StaffViewSet, ServiceViewSet, CustomerViewSet, 
     AppointmentViewSet, StaffShiftViewSet, StaffServiceViewSet, 
     StaffExceptionViewSet, StaffCommissionViewSet, ReferralViewSet, 
-    ExpenseViewSet, UserViewSet, GroupViewSet, PermissionViewSet,
+    ExpenseViewSet, TransactionCategoryViewSet, UserViewSet, GroupViewSet, PermissionViewSet,
     RevenueByStaffReport, RevenueByLocationReport, RevenueByServiceReport,
-    CurrentUserView, PromotionViewSet
+    CurrentUserView, PromotionViewSet, CreditCardViewSet, PartnerViewSet
 )
+from salon_api import views
 
 # Registra as rotas dos ViewSets
 router = DefaultRouter()
@@ -28,25 +29,33 @@ router.register(r'users', UserViewSet, basename='users')
 router.register(r'groups', GroupViewSet, basename='groups')
 router.register(r'permissions', PermissionViewSet, basename='permissions')
 router.register(r'promotions', PromotionViewSet, basename='promotions')
+router.register(r'credit-cards', CreditCardViewSet, basename='credit-cards')
+router.register(r'categories', TransactionCategoryViewSet, basename='categories') 
+router.register(r'accounts', views.BankAccountViewSet)
+router.register(r'partners', PartnerViewSet)
+
 
 urlpatterns = [
     # Admin do Django
     path('admin/', admin.site.urls),
 
     # ---------------------------------------------------------
-    # 🔥 MUDANÇA: TUDO DENTRO DE 'api/' PARA PADRONIZAR
+    # ROTAS DA API
     # ---------------------------------------------------------
     
     # 1. Rotas do Router (CRUDs)
     path('api/', include(router.urls)),
 
-    # 2. Rotas de Autenticação (Agora dentro de api/)
+    # 2. Rotas de Autenticação
     path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('api/users/me/', CurrentUserView.as_view(), name='current_user'),
     
-    # 3. Relatórios (Agora dentro de api/reports/)
+    # 3. Relatórios
     path('api/reports/revenue-by-staff/', RevenueByStaffReport.as_view(), name='report_revenue_by_staff'),
     path('api/reports/revenue-by-location/', RevenueByLocationReport.as_view(), name='report_revenue_by_location'),
     path('api/reports/revenue-by-service/', RevenueByServiceReport.as_view(), name='report_revenue_by_service'),
+
+    path('dashboard/financial/', FinancialDashboardView.as_view(), name='financial-dashboard'),
+    path('finance/cashflow/', CashFlowView.as_view(), name='cash-flow'),
 ]
